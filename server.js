@@ -1121,7 +1121,22 @@ function normalizeApiParams(params, apiMode) {
             user: params.user,
         };
     }
-    return params;
+    // OpenAI mode
+    let tools = Array.isArray(params.tools) ? [...params.tools] : [];
+    if ((!tools || tools.length === 0) && Array.isArray(params.functions)) {
+        tools = params.functions.map(fn => ({
+            type: 'function',
+            function: {
+                name: fn.name,
+                description: fn.description,
+                parameters: fn.parameters
+            }
+        }));
+    }
+    return {
+        ...params,
+        tools,
+    };
 }
 
 function safeJsonParseObject(text, fallback = {}) {
