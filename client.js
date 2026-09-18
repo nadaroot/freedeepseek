@@ -2,15 +2,17 @@
 /**
  * DeepSeek Web API CLI Client
  * 
- * Usage: node client.js "your prompt here"
- *        node client.js < input.txt
+ * Usage:
+ *   node client.js "your prompt here"
+ *   node client.js --thinking "solve this math puzzle"
+ *   node client.js --search "latest news today"
+ *   node client.js -r -s "research topic with search and reasoning"
  * 
- * Environment variables:
- *   DEEPSEEK_TOKEN        - Auth token (required)
- *   DEEPSEEK_HIF_DLIQ     - x-hif-dliq header
- *   DEEPSEEK_HIF_LEIM     - x-hif-leim header
- *   DEEPSEEK_COOKIE       - Cookie string
- *   DEEPSEEK_WASM_URL     - WASM solver URL
+ * Flags:
+ *   -r, --thinking, --reasoning  Enable R1 thinking/reasoning mode
+ *   -s, --search, --web-search   Enable native web search
+ *   -m, --model <name>           Specify model (default: deepseek-chat)
+ *   -h, --help                   Show help
  */
 
 const fs = require('fs');
@@ -25,25 +27,33 @@ const CONFIG = {
     wasmUrl: process.env.DEEPSEEK_WASM_URL || 'https://fe-static.deepseek.com/chat/static/sha3_wasm_bg.7b9ca65ddd.wasm',
 };
 
-// Try loading from local auth files. deepseek-auth.json is created by `npm run auth`;
-// auth.json is kept as a legacy fallback for older local setups.
+// Try loading from local auth files
 try {
     for (const fileName of ['deepseek-auth.json', 'auth.json']) {
         const authPath = path.join(__dirname, fileName);
         if (fs.existsSync(authPath) && !CONFIG.token) {
             const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-            CONFIG.token = CONFIG.token || auth.token;
-            CONFIG.hif_dliq = CONFIG.hif_dliq || auth.hif_dliq;
-            CONFIG.hif_leim = CONFIG.hif_leim || auth.hif_leim;
-            CONFIG.cookie = CONFIG.cookie || auth.cookie;
-            CONFIG.wasmUrl = CONFIG.wasmUrl || auth.wasmUrl;
+            if (Array.isArray(auth.accounts) && auth.accounts.length > 0) {
+                const acct = auth.accounts[0];
+                CONFIG.token = acct.token || '';
+                CONFIG.hif_dliq = acct.hif_dliq || '';
+                CONFIG.hif_leim = acct.hif_leim || '';
+                CONFIG.cookie = acct.cookie || '';
+                CONFIG.wasmUrl = acct.wasmUrl || CONFIG.wasmUrl;
+            } else {
+                CONFIG.token = CONFIG.token || auth.token;
+                CONFIG.hif_dliq = CONFIG.hif_dliq || auth.hif_dliq;
+                CONFIG.hif_leim = CONFIG.hif_leim || auth.hif_leim;
+                CONFIG.cookie = CONFIG.cookie || auth.cookie;
+                CONFIG.wasmUrl = CONFIG.wasmUrl || auth.wasmUrl;
+            }
         }
     }
 } catch (e) {}
 
 if (!CONFIG.token) {
     console.error('Error: DeepSeek auth is not set. Run `npm run auth`, or provide DEEPSEEK_TOKEN/DEEPSEEK_COOKIE via env.');
-    console.error('Usage: DEEPSEEK_TOKEN=xxx DEEPSEEK_COOKIE=xxx node client.js "prompt"');
+    console.error('Usage: node client.js "prompt"');
     process.exit(1);
 }
 
@@ -80,20 +90,22 @@ async function solvePOW(challenge) {
     return Math.floor(ans);
 }
 
-async function askDeepSeek(prompt, onChunk) {
+async function askDeepSeek(prompt, options = {}, onChunk, onThinkingChunk) {
     const chalResp = await fetch('https://chat.deepseek.com/api/v0/chat/create_pow_challenge', {
         method: 'POST', headers: BASE_HEADERS,
         body: JSON.stringify({ target_path: '/api/v0/chat/completion' })
     });
     const chalData = await chalResp.json();
-    const challenge = chalData.data.biz_data.challenge;
+    const challenge = chalData?.data?.biz_data?.challenge;
+    if (!challenge) throw new Error('Could not get PoW challenge. Check auth token.');
     const answer = await solvePOW(challenge);
 
     const sessResp = await fetch('https://chat.deepseek.com/api/v0/chat_session/create', {
         method: 'POST', headers: BASE_HEADERS, body: '{}'
     });
     const sessData = await sessResp.json();
-    const sessionId = sessData.data.biz_data.chat_session?.id || sessData.data.biz_data.id;
+    const sessionId = sessData?.data?.biz_data?.chat_session?.id || sessData?.data?.biz_data?.id;
+    if (!sessionId) throw new Error('Could not create chat session.');
 
     const powResp = {
         algorithm: challenge.algorithm, challenge: challenge.challenge,
@@ -108,18 +120,28 @@ async function askDeepSeek(prompt, onChunk) {
         body: JSON.stringify({
             chat_session_id: sessionId,
             parent_message_id: null,
-            model_type: 'default',
-            prompt, ref_file_ids: [],
-            thinking_enabled: false, search_enabled: false,
-            action: null, preempt: false,
+            model_type: options.modelType || 'default',
+            prompt,
+            ref_file_ids: options.refFileIds || [],
+            thinking_enabled: options.thinkingEnabled === true,
+            search_enabled: options.searchEnabled === true,
+            action: null,
+            preempt: false,
         })
     });
+
+    if (!compResp.ok) {
+        const err = await compResp.text();
+        throw new Error(`Completion failed with HTTP ${compResp.status}: ${err}`);
+    }
 
     const reader = compResp.body.getReader();
     const decoder = new TextDecoder();
     let fullResponse = '';
+    let fullThinking = '';
     let buffer = '';
     let lastPath = null;
+    let isThinking = false;
 
     while (true) {
         const { done, value } = await reader.read();
@@ -134,7 +156,18 @@ async function askDeepSeek(prompt, onChunk) {
                 try {
                     const data = JSON.parse(jsonStr);
                     if (data.p !== undefined) lastPath = data.p;
-                    if (lastPath === 'response/content' && data.v) {
+                    if (lastPath === 'response/thinking_content' && data.v) {
+                        if (!isThinking) {
+                            isThinking = true;
+                            if (onThinkingChunk) onThinkingChunk('\n[Thinking]\n');
+                        }
+                        if (onThinkingChunk) onThinkingChunk(data.v);
+                        fullThinking += data.v;
+                    } else if (lastPath === 'response/content' && data.v) {
+                        if (isThinking) {
+                            isThinking = false;
+                            if (onChunk) onChunk('\n\n[Answer]\n');
+                        }
                         if (onChunk) onChunk(data.v);
                         fullResponse += data.v;
                     }
@@ -142,26 +175,61 @@ async function askDeepSeek(prompt, onChunk) {
             }
         }
     }
-    return fullResponse;
+    return { content: fullResponse, thinking: fullThinking };
 }
 
 async function main() {
-    const prompt = process.argv.slice(2).join(' ') || fs.readFileSync('/dev/stdin', 'utf8').trim();
+    const rawArgs = process.argv.slice(2);
+    let promptParts = [];
+    let thinkingEnabled = false;
+    let searchEnabled = false;
+    let modelType = 'default';
+
+    for (let i = 0; i < rawArgs.length; i++) {
+        const arg = rawArgs[i];
+        if (arg === '--thinking' || arg === '-r' || arg === '--reasoning') {
+            thinkingEnabled = true;
+        } else if (arg === '--search' || arg === '-s' || arg === '--web-search') {
+            searchEnabled = true;
+        } else if (arg === '--model' || arg === '-m') {
+            modelType = rawArgs[++i] || 'default';
+        } else if (arg === '--help' || arg === '-h') {
+            console.log(`
+FreeDeepseek CLI Client
+
+Usage:
+  node client.js [options] "prompt"
+
+Options:
+  -r, --thinking, --reasoning   Enable R1 reasoning mode
+  -s, --search, --web-search    Enable native web search
+  -m, --model <name>            Model type (default, expert)
+  -h, --help                    Show this help message
+`);
+            process.exit(0);
+        } else {
+            promptParts.push(arg);
+        }
+    }
+
+    let prompt = promptParts.join(' ');
+    if (!prompt && !process.stdin.isTTY) {
+        prompt = fs.readFileSync(0, 'utf8').trim();
+    }
+
     if (!prompt) {
-        console.error('Usage: node client.js "your prompt here"');
+        console.error('Usage: node client.js [options] "your prompt here"');
+        console.error('Try: node client.js --help');
         process.exit(1);
     }
 
-    let fullText = '';
-    const response = await askDeepSeek(prompt, (chunk) => {
-        process.stdout.write(chunk);
-        fullText += chunk;
-    });
+    await askDeepSeek(
+        prompt,
+        { thinkingEnabled, searchEnabled, modelType },
+        (chunk) => process.stdout.write(chunk),
+        (thinkChunk) => process.stdout.write(thinkChunk)
+    );
     process.stdout.write('\n');
-
-    const ts = Date.now();
-    fs.writeFileSync(`/tmp/deepseek_response_${ts}.txt`, fullText.trim());
-    console.error(`\n[*] Saved /tmp/deepseek_response_${ts}.txt`);
 }
 
 main().catch(e => {

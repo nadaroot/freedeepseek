@@ -531,8 +531,15 @@ function resolveModelConfig(model) {
 function isKnownModel(model) { return Object.prototype.hasOwnProperty.call(MODEL_CONFIGS, String(model || '').toLowerCase()); }
 function isSupportedModel(model) { return resolveModelConfig(model).supported === true; }
 
-async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default', refFileIds = []) {
+async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default', refFileIds = [], requestOverrides = {}) {
     const modelCfg = resolveModelConfig(model);
+    const thinkingEnabled = requestOverrides.thinking_enabled !== undefined
+        ? Boolean(requestOverrides.thinking_enabled)
+        : modelCfg.thinking_enabled;
+    const searchEnabled = requestOverrides.search_enabled !== undefined
+        ? Boolean(requestOverrides.search_enabled)
+        : modelCfg.search_enabled;
+
     const session = getOrCreateAgentSession(agentId);
     const account = selectAccountForSession(session);
     const dsHeaders = account.headers;
@@ -608,7 +615,7 @@ async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default', re
             parent_message_id: session.parentMessageId,
             model_type: modelCfg.model_type,
             prompt: prompt, ref_file_ids: (refFileIds && refFileIds.length > 0 ? refFileIds : []),
-            thinking_enabled: modelCfg.thinking_enabled, search_enabled: modelCfg.search_enabled,
+            thinking_enabled: thinkingEnabled, search_enabled: searchEnabled,
             action: null, preempt: false,
         })
     });
@@ -652,7 +659,7 @@ async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default', re
                     parent_message_id: null,
                     model_type: modelCfg.model_type,
                     prompt: prompt, ref_file_ids: (refFileIds && refFileIds.length > 0 ? refFileIds : []),
-                    thinking_enabled: modelCfg.thinking_enabled, search_enabled: modelCfg.search_enabled,
+                    thinking_enabled: thinkingEnabled, search_enabled: searchEnabled,
                     action: null, preempt: false,
                 })
             });
@@ -1557,11 +1564,9 @@ const server = http.createServer(async (req, res) => {
                     : `${historyPrefix}${prompt}`;
             }
 
-            const fullPrompt = systemPrompt ? `${systemPrompt}
-
-${prompt}` : prompt;
+            const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
             const startTime = Date.now();
-                        let refFileIds = Array.isArray(rawParams.ref_file_ids) ? [...rawParams.ref_file_ids] : [];
+            let refFileIds = Array.isArray(rawParams.ref_file_ids) ? [...rawParams.ref_file_ids] : [];
             const imageBuffers = extractImageBuffers(messages, rawParams);
             if (imageBuffers.length > 0) {
                 const targetAccount = selectAccountForSession(getOrCreateAgentSession(agentId));
@@ -1574,7 +1579,32 @@ ${prompt}` : prompt;
                     }
                 }
             }
-            const { resp: dsResp } = await askDeepSeekStream(sendPrompt, agentId, requestedModel, refFileIds);
+
+            const requestOverrides = {};
+            if (rawParams.search_enabled !== undefined) requestOverrides.search_enabled = Boolean(rawParams.search_enabled);
+            else if (rawParams.web_search !== undefined) requestOverrides.search_enabled = Boolean(rawParams.web_search);
+            else if (rawParams.search !== undefined) requestOverrides.search_enabled = Boolean(rawParams.search);
+            else if (req.headers['x-deepseek-search'] !== undefined) {
+                const hVal = String(req.headers['x-deepseek-search']).toLowerCase();
+                requestOverrides.search_enabled = (hVal === 'true' || hVal === '1' || hVal === 'on');
+            } else if (req.headers['x-search'] !== undefined) {
+                const hVal = String(req.headers['x-search']).toLowerCase();
+                requestOverrides.search_enabled = (hVal === 'true' || hVal === '1' || hVal === 'on');
+            }
+
+            if (rawParams.thinking_enabled !== undefined) requestOverrides.thinking_enabled = Boolean(rawParams.thinking_enabled);
+            else if (rawParams.thinking !== undefined) {
+                requestOverrides.thinking_enabled = typeof rawParams.thinking === 'object'
+                    ? rawParams.thinking.type === 'enabled'
+                    : Boolean(rawParams.thinking);
+            } else if (rawParams.reasoning !== undefined) {
+                requestOverrides.thinking_enabled = Boolean(rawParams.reasoning);
+            } else if (req.headers['x-deepseek-thinking'] !== undefined) {
+                const hVal = String(req.headers['x-deepseek-thinking']).toLowerCase();
+                requestOverrides.thinking_enabled = (hVal === 'true' || hVal === '1' || hVal === 'on');
+            }
+
+            const { resp: dsResp } = await askDeepSeekStream(sendPrompt, agentId, requestedModel, refFileIds, requestOverrides);
 
             // Process streaming response from DeepSeek — returns { content, reasoningContent, messageId, finishReason }
             async function readDeepSeekResponse(readable) {
