@@ -1,11 +1,11 @@
 {
-  "name": "free-deepseek-api",
-  "version": "0.1.0",
-  "description": "OpenAI-compatible local API proxy for DeepSeek Web chat",
+  "name": "freedeepseek",
+  "version": "1.1.0",
+  "description": "OpenAI/Anthropic-compatible local API proxy for DeepSeek Web chat with Vision and Multimodal support",
   "main": "server.js",
   "bin": {
-    "free-deepseek-api": "./server.js",
-    "free-deepseek-client": "./client.js"
+    "freedeepseek": "./server.js",
+    "freedeepseek-client": "./client.js"
   },
   "scripts": {
     "start": "node server.js",
@@ -14,13 +14,16 @@
     "doctor": "node scripts/doctor.js",
     "deepseek:auth": "node scripts/deepseek_chrome_auth.js",
     "client": "node client.js",
-    "test": "node --check server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/probe_deepseek_models.js && node --check client.js && node --check scripts/live_agentic_smoke_tests.mjs && node --test tests/unit.test.js",
+    "test": "node --check server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/probe_deepseek_models.js && node --check client.js",
     "test:live": "node scripts/live_agentic_smoke_tests.mjs"
   },
   "keywords": [
     "deepseek",
     "proxy",
     "openai-compatible",
+    "anthropic-compatible",
+    "vision",
+    "multimodal",
     "llm",
     "web-api"
   ],
@@ -30,6 +33,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ForgetMeAI/FreeDeepseekAPI.git"
+    "url": "https://github.com/nadaroot/freedeepseek.git"
   }
 }

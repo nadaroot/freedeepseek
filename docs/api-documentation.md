@@ -1,15 +1,15 @@
-# DeepSeek Web API Proxy — Полная техническая документация
+# DeepSeek Web API Proxy — Техническая документация
 
-## 📌 Обзор
+## Обзор
 
-**FreeDeepseekAPI** — это локальный API-прокси сервер для веб-версии **DeepSeek Chat** (`chat.deepseek.com`), предоставляющий доступ к мощным моделям **DeepSeek-V3**, **DeepSeek-R1 (Thinking/Reasoning)**, **Web Search** и **Native Vision (распознавание изображений и файлов)** через стандартные интерфейсы:
-- **OpenAI API** (`/v1/chat/completions`, `/v1/models`, `/v1/responses`)
-- **Anthropic Messages API** (`/v1/messages` для Claude Code и Anthropic SDK)
-- **Zero Dependencies**: работает на чистом Node.js 18+ без сторонних npm-пакетов.
+FreeDeepseekAPI — это локальный API-прокси сервер для веб-версии DeepSeek Chat (chat.deepseek.com), предоставляющий доступ к моделям DeepSeek-V3, DeepSeek-R1 (Thinking/Reasoning), Web Search и Native Vision через стандартные интерфейсы:
+- OpenAI API (/v1/chat/completions, /v1/models, /v1/responses)
+- Anthropic Messages API (/v1/messages для Claude Code и Anthropic SDK)
+- Zero Dependencies: чистый Node.js 18+ без сторонних npm-пакетов.
 
 ---
 
-## 🏛️ 1. Архитектура и схема работы
+## 1. Архитектура и схема работы
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -51,10 +51,10 @@
 
 ---
 
-## 🔐 2. Реверс-инжиниринг протокола DeepSeek Web
+## 2. Реверс-инжиниринг протокола DeepSeek Web
 
 ### 2.1 Авторизация и заголовки
-Каждый запрос к `https://chat.deepseek.com` требует наличия следующих заголовков:
+Каждый запрос к https://chat.deepseek.com требует наличия следующих заголовков:
 ```http
 Authorization: Bearer <user_web_token>
 Cookie: aws-waf-token=...; smidV2=...; ds_session_id=...
@@ -78,13 +78,13 @@ Referer: https://chat.deepseek.com/
    -- или для загрузки файлов:
    { "target_path": "/api/v0/file/upload_file" }
    ```
-2. Ответ сервера содержит `algorithm`, `challenge`, `salt`, `expire_at`, `difficulty`, `signature`.
-3. Решение вычисляется с помощью WebAssembly-модуля DeepSeek (`sha3_wasm_bg.wasm`):
+2. Ответ сервера содержит algorithm, challenge, salt, expire_at, difficulty, signature.
+3. Решение вычисляется с помощью WebAssembly-модуля DeepSeek (sha3_wasm_bg.wasm):
    ```javascript
    const prefix = challenge.salt + '_' + challenge.expire_at + '_';
    // Передача параметров в память WASM и вызов wasm_solve(...)
    ```
-4. Полученный ответ упаковывается в Base64 и передаётся в заголовке `X-DS-PoW-Response`:
+4. Полученный ответ упаковывается в Base64 и передаётся в заголовке X-DS-PoW-Response:
    ```json
    {
      "algorithm": "DeepSeekHashV1",
@@ -98,9 +98,9 @@ Referer: https://chat.deepseek.com/
 
 ---
 
-## 🖼️ 3. Протокол загрузки файлов и Vision (Новое)
+## 3. Протокол загрузки файлов и Vision
 
-### 3.1 Загрузка файла (`/api/v0/file/upload_file`)
+### 3.1 Загрузка файла (/api/v0/file/upload_file)
 ```http
 POST https://chat.deepseek.com/api/v0/file/upload_file
 X-DS-PoW-Response: <base64_pow_for_upload_file>
@@ -114,7 +114,7 @@ Content-Type: image/png
 ------WebKitFormBoundary...--
 ```
 
-**Ответ:**
+Ответ:
 ```json
 {
   "code": 0,
@@ -132,14 +132,14 @@ Content-Type: image/png
 }
 ```
 
-### 3.2 Опрос статуса файла (`/api/v0/file/fetch_files`)
+### 3.2 Опрос статуса файла (/api/v0/file/fetch_files)
 Прокси опрашивает статус файла с интервалом 1 сек:
 ```http
 GET https://chat.deepseek.com/api/v0/file/fetch_files?file_ids=file-55174295-bfe0-40f8-8de8-4ae63510bc04
 ```
-Когда `status === "SUCCESS"` — файл готов к использованию в диалоге.
+Когда status === "SUCCESS" — файл готов к использованию в диалоге.
 
-### 3.3 Прикрепление файла к генерации (`ref_file_ids`)
+### 3.3 Прикрепление файла к генерации (ref_file_ids)
 ```http
 POST https://chat.deepseek.com/api/v0/chat/completion
 X-DS-PoW-Response: <base64_pow_for_completion>
@@ -158,16 +158,16 @@ Content-Type: application/json
 
 ---
 
-## 📡 4. Справочник API эндпоинтов прокси
+## 4. Справочник API эндпоинтов прокси
 
-### 4.1 `POST /v1/chat/completions` (OpenAI Compatible)
+### 4.1 POST /v1/chat/completions (OpenAI Compatible)
 
 #### Заголовки
 | Заголовок | Обязательный | Описание |
 | :--- | :---: | :--- |
-| `Content-Type` | Да | `application/json` |
-| `Authorization` | Нет | `Bearer <любой_токен>` |
-| `X-Agent-Session` | Нет | Идентификатор сессии/пользователя (для изоляции контекста) |
+| Content-Type | Да | application/json |
+| Authorization | Нет | Bearer <любой_токен> |
+| X-Agent-Session | Нет | Идентификатор сессии/пользователя (для изоляции контекста) |
 
 #### Тело запроса (Текст)
 ```json
@@ -228,8 +228,8 @@ Content-Type: application/json
 
 ---
 
-### 4.2 `POST /v1/messages` (Anthropic Compatible)
-Полная совместимость со спецификацией Anthropic Messages API (для **Claude Code**):
+### 4.2 POST /v1/messages (Anthropic Compatible)
+Полная совместимость со спецификацией Anthropic Messages API (для Claude Code):
 ```json
 {
   "model": "deepseek-chat",
@@ -242,7 +242,7 @@ Content-Type: application/json
 
 ---
 
-### 4.3 `GET /v1/models`
+### 4.3 GET /v1/models
 Возвращает список поддерживаемых моделей:
 ```json
 {
@@ -259,7 +259,7 @@ Content-Type: application/json
 
 ---
 
-### 4.4 `POST /reset-session?agent=<id>`
+### 4.4 POST /reset-session?agent=<id>
 Сбрасывает историю переписки для указанного агента/пользователя:
 ```bash
 curl -X POST "http://localhost:9655/reset-session?agent=tg_821315597"
@@ -269,7 +269,7 @@ curl -X POST "http://localhost:9655/reset-session?agent=all"
 
 ---
 
-## 💻 5. Примеры интеграции на разных языках
+## 5. Примеры интеграции на разных языках
 
 ### Python (aiohttp / Async)
 ```python
@@ -337,8 +337,8 @@ main();
 
 ---
 
-## 🛡️ 6. Безопасность и хранение данных
+## 6. Безопасность и хранение данных
 
-1. Файл `deepseek-auth.json` содержит сессионный токен и WAF-куки. Храните его в секрете и добавьте в `.gitignore`.
+1. Файл deepseek-auth.json содержит сессионный токен и WAF-куки. Храните его в секрете и добавьте в .gitignore.
 2. Все запросы выполняются локально на вашем сервере без отправки данных сторонним провайдерам (напрямую в DeepSeek).
-3. Токены и сессии изолированы: запросы от разных пользователей (`user` / `X-Agent-Session`) не видят контекст друг друга.
+3. Токены и сессии изолированы: запросы от разных пользователей (user / X-Agent-Session) не видят контекст друг друга.
