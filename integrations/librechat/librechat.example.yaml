@@ -1,0 +1,29 @@
+# LibreChat Configuration Example
+
+Add the following block to your `librechat.yaml` file:
+
+```yaml
+version: 1.1.5
+
+endpoints:
+  custom:
+    - name: "FreeDeepseek"
+      apiKey: "sk-freedeepseek"
+      baseURL: "http://host.docker.internal:9655/v1"
+      models:
+        default:
+          - "deepseek-chat"
+          - "deepseek-reasoner"
+          - "deepseek-r1"
+          - "deepseek-v3"
+          - "deepseek-vl"
+        fetch: false
+      titleConvo: true
+      titleModel: "deepseek-chat"
+      summarize: false
+      summaryModel: "deepseek-chat"
+      forcePrompt: false
+      modelDisplayLabel: "DeepSeek"
+```
+
+If LibreChat runs in Docker, use `http://host.docker.internal:9655/v1` or your local network IP (e.g. `http://192.168.1.100:9655/v1`).

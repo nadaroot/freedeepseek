@@ -1,0 +1,32 @@
+{
+  "models": [
+    {
+      "title": "DeepSeek-V3",
+      "provider": "openai",
+      "model": "deepseek-chat",
+      "apiBase": "http://127.0.0.1:9655/v1",
+      "apiKey": "sk-freedeepseek"
+    },
+    {
+      "title": "DeepSeek-R1 (Reasoning)",
+      "provider": "openai",
+      "model": "deepseek-reasoner",
+      "apiBase": "http://127.0.0.1:9655/v1",
+      "apiKey": "sk-freedeepseek"
+    },
+    {
+      "title": "DeepSeek-Coder",
+      "provider": "openai",
+      "model": "deepseek-coder",
+      "apiBase": "http://127.0.0.1:9655/v1",
+      "apiKey": "sk-freedeepseek"
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "DeepSeek-Coder Autocomplete",
+    "provider": "openai",
+    "model": "deepseek-coder",
+    "apiBase": "http://127.0.0.1:9655/v1",
+    "apiKey": "sk-freedeepseek"
+  }
+}
