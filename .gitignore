@@ -1,0 +1,23 @@
+# Auth & Credentials
+deepseek-auth.json
+deepseek-auth-*.json
+*.auth.json
+
+# Chrome profiles & local caches
+.chrome-profile/
+.chrome-profile-*/
+.chrome-profile-deepseek/
+.temp_update/
+temp/
+
+# Node & Python
+node_modules/
+__pycache__/
+*.pyc
+.env
+*.log
+
+# OS & IDE
+.DS_Store
+.idea/
+.vscode/
