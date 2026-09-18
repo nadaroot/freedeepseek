@@ -9,20 +9,6 @@
 
 ---
 
-## Архитектура
-
-```mermaid
-flowchart LR
-    Client[Клиент / Bot / Open-WebUI / Cursor] -->|OpenAI / Anthropic API| Proxy[FreeDeepseekAPI Proxy :9655]
-    Proxy -->|PoW Challenge & WebAssembly| WASM[sha3_wasm_bg.wasm]
-    WASM -->|PoW Solution| Proxy
-    Proxy -->|HTTPS Web Protocol| DeepSeek[chat.deepseek.com]
-    DeepSeek -->|SSE Stream & Reasoning| Proxy
-    Proxy -->|Standard API Response| Client
-```
-
----
-
 ## О проекте
 
 FreeDeepseekAPI — это высокопроизводительный локальный API-прокси сервер для веб-версии DeepSeek Chat (`chat.deepseek.com`), предоставляющий доступ к моделям DeepSeek-V3, DeepSeek-R1 (Reasoning), Web Search, Function Calling и распознаванию изображений через стандартные интерфейсы:
