@@ -1,14 +1,36 @@
 # FreeDeepseekAPI
 
-Локальный OpenAI / Anthropic-compatible API proxy для DeepSeek Web Chat с поддержкой изображений и файлов.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](./Dockerfile)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
+
+Локальный OpenAI / Anthropic-compatible API proxy для DeepSeek Web Chat с поддержкой изображений, Function Calling, веб-поиска и изоляции сессий.
+
+---
+
+## Архитектура
+
+```mermaid
+flowchart LR
+    Client[Клиент / Bot / Open-WebUI / Cursor] -->|OpenAI / Anthropic API| Proxy[FreeDeepseekAPI Proxy :9655]
+    Proxy -->|PoW Challenge & WebAssembly| WASM[sha3_wasm_bg.wasm]
+    WASM -->|PoW Solution| Proxy
+    Proxy -->|HTTPS Web Protocol| DeepSeek[chat.deepseek.com]
+    DeepSeek -->|SSE Stream & Reasoning| Proxy
+    Proxy -->|Standard API Response| Client
+```
 
 ---
 
 ## О проекте
 
-FreeDeepseekAPI — это локальный API-прокси сервер для веб-версии DeepSeek Chat (chat.deepseek.com), предоставляющий доступ к моделям DeepSeek-V3, DeepSeek-R1 (Reasoning), Web Search и распознаванию изображений через стандартные интерфейсы OpenAI API, Anthropic Messages API и OpenAI Responses API.
+FreeDeepseekAPI — это высокопроизводительный локальный API-прокси сервер для веб-версии DeepSeek Chat (`chat.deepseek.com`), предоставляющий доступ к моделям DeepSeek-V3, DeepSeek-R1 (Reasoning), Web Search, Function Calling и распознаванию изображений через стандартные интерфейсы:
+- OpenAI Chat Completions API (`/v1/chat/completions`)
+- Anthropic Messages API shim (`/v1/messages` для Claude Code / Roo-Code / Cline)
+- OpenAI Responses API shim (`/v1/responses`)
 
-Сервер работает напрямую через веб-протокол DeepSeek с автоматическим решением криптографических задач Proof-of-Work (PoW) через WebAssembly. Это позволяет использовать DeepSeek в сторонних клиентах (Open WebUI, Telegram-боты, Claude Code, LiteLLM, Cursor, Python/Node.js скрипты).
+Сервер работает напрямую через веб-протокол DeepSeek с автоматическим решением криптографических задач Proof-of-Work (PoW) через WebAssembly.
 
 ---
 
@@ -16,119 +38,119 @@ FreeDeepseekAPI — это локальный API-прокси сервер дл
 
 * Изначальный автор проекта: ForgetMeAI (базовая версия FreeDeepseekAPI с реверс-инжинирингом PoW и эмуляцией OpenAI/Anthropic эндпоинтов).
 * Форк и адаптация под Claude Code: crubly/FreeDeepseekAPI.
-* Доработки, загрузка файлов и Vision: nadaroot.
+* Доработки, загрузка файлов, Vision, Docker и Tools: nadaroot.
 
 ---
 
 ## Возможности
 
-* OpenAI Chat Completions API: POST /v1/chat/completions (streaming SSE и non-streaming JSON).
-* Anthropic Messages API shim: POST /v1/messages (для Claude Code / Anthropic SDK).
-* OpenAI Responses API shim: POST /v1/responses.
-* Поддержка DeepSeek-R1: вывод пошагового хода мыслей в поле reasoning_content.
-* Решение PoW: генерация решений Proof-of-Work через встроенный модуль WebAssembly (sha3_wasm_bg.wasm).
-* Поиск в интернете: поддержка веб-поиска DeepSeek через суффикс -search.
-* Загрузка изображений и документов: двухэтапная загрузка файлов через /api/v0/file/upload_file и /api/v0/file/fetch_files с привязкой ref_file_ids к сессии.
+* OpenAI Chat Completions API: `POST /v1/chat/completions` (streaming SSE и non-streaming JSON).
+* Anthropic Messages API shim: `POST /v1/messages` (для Claude Code, Cline, Roo-Code).
+* Function Calling & Tools: эмуляция вызова функций и инструментов для интеграции с LangChain, CrewAI, AutoGen и OpenAI SDK.
+* Поддержка DeepSeek-R1: вывод пошагового хода мыслей в поле `reasoning_content`.
+* Web Search: прямое управление интернет-поиском через параметры запроса (`"search_enabled": true`) или суффикс модели `-search`.
+* Решение PoW: генерация решений Proof-of-Work через встроенный модуль WebAssembly (`sha3_wasm_bg.wasm`).
+* Загрузка изображений и документов: двухэтапная загрузка файлов через `/api/v0/file/upload_file` и `/api/v0/file/fetch_files` с привязкой `ref_file_ids` к сессии.
 * Поддержка OpenAI Multimodal формата: передача картинок через base64 data URLs или локальные пути на диске.
-* Vision + DeepSeek-R1: анализ изображений с пошаговыми рассуждениями.
-* Изоляция сессий: заголовок X-Agent-Session или поле user разделяет контекст между разными пользователями.
-* Zero dependencies: чистый Node.js 18+ без внешних npm-пакетов.
+* Прокси: поддержка HTTP/HTTPS/SOCKS5 прокси как глобально, так и индивидуально для каждого аккаунта.
+* Изоляция сессий: заголовок `X-Agent-Session` или поле `user` разделяет контекст между разными пользователями.
+* Docker & Compose: быстрый запуск в изолированном контейнере.
+* Zero external runtime dependencies: чистый Node.js 18+ без внешних тяжелых npm-пакетов.
 
 ---
 
 ## Быстрый старт
 
-### Требования
-* Node.js 18+
-* Google Chrome или Chromium (для первичной авторизации)
+### Вариант 1: Запуск через Docker Compose (Рекомендуется)
 
-### 1. Установка
+1. Клонируйте репозиторий:
 ```bash
 git clone https://github.com/nadaroot/freedeepseek.git deepseek-api
 cd deepseek-api
 ```
 
-### 2. Авторизация аккаунта
-Запустите меню авторизации:
+2. Подготовьте `deepseek-auth.json` (скопируйте из `auth.example.json` и укажите ваш токен):
+```bash
+cp auth.example.json deepseek-auth.json
+```
+
+3. Запустите контейнер:
+```bash
+docker compose up -d
+```
+
+Сервер доступен по адресу `http://localhost:9655`.
+
+---
+
+### Вариант 2: Локальный запуск (Node.js)
+
+#### Требования
+* Node.js 18+
+* Google Chrome или Chromium (для автоматического получения токена)
+
+1. Авторизация аккаунта:
 ```bash
 npm run auth
 ```
-1. Выберите пункт 1 (Авторизоваться через Chrome).
-2. В открывшемся окне браузера войдите в свой аккаунт на chat.deepseek.com.
-3. Отправьте любое тестовое сообщение (например, "привет").
-4. Токен и куки автоматически сохранятся в файл deepseek-auth.json.
+- Выберите пункт 1 (Авторизоваться через Chrome).
+- Войдите в свой аккаунт на `chat.deepseek.com`.
+- Отправьте любое тестовое сообщение (например, "привет").
+- Токен и куки автоматически сохранятся в `deepseek-auth.json`.
 
-Либо заполните deepseek-auth.json вручную по примеру auth.example.json.
-
-### 3. Запуск сервера
+2. Запуск сервера:
 ```bash
 npm start
 ```
-Сервер запустится на http://localhost:9655.
 
 ---
 
-## Работа с изображениями (Vision)
+## Готовые интеграции
 
-### Способ 1: OpenAI Multimodal Format (Base64)
-```json
-{
-  "model": "deepseek-reasoner",
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "Опиши подробно, что изображено на картинке, и реши задачу:" },
-        {
-          "type": "image_url",
-          "image_url": {
-            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJAD/2f89eCAAAAAElFTkSuQmCC"
-          }
-        }
-      ]
-    }
-  ]
-}
-```
+В папке [`integrations/`](./integrations/) доступны готовые файлы конфигурации и инструкции для подключения:
 
-### Способ 2: Локальный путь к файлу на сервере
-```json
-{
-  "model": "deepseek-reasoner",
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "Реши геометрическую задачу на чертеже:" },
-        { "type": "image_url", "image_url": { "url": "/tmp/geometry_task.jpg" } }
-      ]
-    }
-  ]
-}
-```
-
-### Способ 3: Массив images в корне запроса
-```json
-{
-  "model": "deepseek-chat",
-  "messages": [{ "role": "user", "content": "Что на этом рисунке?" }],
-  "images": ["data:image/jpeg;base64,..."]
-}
-```
+* **[LibreChat](./integrations/librechat/librechat.example.yaml)**
+* **[Open-WebUI](./integrations/open-webui/README.md)**
+* **[Cursor IDE](./integrations/cursor/README.md)**
+* **[Continue.dev](./integrations/continue/config.example.json)**
+* **[NextChat](./integrations/nextchat/README.md)**
+* **[Cline & Roo-Code](./integrations/cline/README.md)**
 
 ---
 
-## Примеры запросов
+## Примеры использования
 
-### Python (библиотека openai)
+### 1. Python (библиотека openai)
+
 ```python
 from openai import OpenAI
-import base64
 
 client = OpenAI(
     base_url="http://localhost:9655/v1",
-    api_key="none"
+    api_key="sk-freedeepseek"
 )
+
+response = client.chat.completions.create(
+    model="deepseek-reasoner",
+    messages=[
+        {"role": "user", "content": "Реши уравнение 2x^2 - 8 = 0 с пояснениями."}
+    ]
+)
+
+choice = response.choices[0].message
+if hasattr(choice, "reasoning_content") and choice.reasoning_content:
+    print(f"--- Ход мыслей (R1): ---\n{choice.reasoning_content}\n")
+
+print(f"--- Ответ: ---\n{choice.content}")
+```
+
+### 2. Распознавание изображений (Vision)
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:9655/v1", api_key="sk-freedeepseek")
 
 with open("task.jpg", "rb") as f:
     b64_img = base64.b64encode(f.read()).decode("utf-8")
@@ -139,60 +161,47 @@ response = client.chat.completions.create(
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "Реши уравнение на фото:"},
+                {"type": "text", "text": "Что изображено на этом фото?"},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
             ]
         }
-    ],
-    extra_headers={"X-Agent-Session": "user_12345"}
+    ]
 )
 
-choice = response.choices[0].message
-if hasattr(choice, "reasoning_content") and choice.reasoning_content:
-    print(f"--- Ход мыслей (R1): ---\n{choice.reasoning_content}\n")
-
-print(f"--- Ответ: ---\n{choice.content}")
+print(response.choices[0].message.content)
 ```
 
-### cURL (Текстовый запрос с поиском в интернете)
-```bash
-curl http://localhost:9655/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-chat-search",
-    "messages": [
-      {"role": "user", "content": "Какой сегодня официальный курс доллара и евро?"}
-    ]
-  }'
-```
+### 3. Function Calling / Tools
 
-### Node.js (Streaming SSE)
-```javascript
-const response = await fetch("http://localhost:9655/v1/chat/completions", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    model: "deepseek-reasoner",
-    stream: true,
-    messages: [{ role: "user", content: "Докажи теорему Пифагора простыми словами." }]
-  })
-});
+```python
+from openai import OpenAI
 
-const reader = response.body.getReader();
-const decoder = new TextDecoder();
+client = OpenAI(base_url="http://localhost:9655/v1", api_key="sk-freedeepseek")
 
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  const chunk = decoder.decode(value);
-  for (const line of chunk.split("\n")) {
-    if (line.startsWith("data: ") && !line.includes("[DONE]")) {
-      const data = JSON.parse(line.slice(6));
-      const text = data.choices[0]?.delta?.content || "";
-      process.stdout.write(text);
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Получить погоду в городе",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "Название города"}
+                },
+                "required": ["city"]
+            }
+        }
     }
-  }
-}
+]
+
+response = client.chat.completions.create(
+    model="deepseek-chat",
+    messages=[{"role": "user", "content": "Какая погода в Санкт-Петербурге?"}],
+    tools=tools
+)
+
+print(response.choices[0].message.tool_calls)
 ```
 
 ---
@@ -201,62 +210,28 @@ while (true) {
 
 | Идентификатор модели | Базовая модель Web | Описание | Поддержка Vision |
 | :--- | :--- | :--- | :---: |
-| deepseek-chat | DeepSeek-V3 (Быстрый) | Быстрый чат, ответы на вопросы, генерация кода | Да |
-| deepseek-reasoner / deepseek-r1 | DeepSeek-R1 (Рассуждения) | Пошаговое мышление (reasoning_content), математика | Да |
-| deepseek-chat-search | DeepSeek-V3 + Поиск | Свежие данные из интернета | Да |
-| deepseek-reasoner-search | DeepSeek-R1 + Поиск | Анализ с источниками из интернета | Да |
-| deepseek-expert | DeepSeek Expert | Экспертный режим модели | Да |
-| deepseek-expert-search | DeepSeek Expert + Поиск | Экспертный режим с поиском в сети | Да |
-| deepseek-vision | DeepSeek Native Vision | Распознавание фото, схем, таблиц и документов | Да |
+| `deepseek-chat` / `deepseek-v3` | DeepSeek-V3 (Быстрый) | Быстрый чат, ответы на вопросы, генерация кода | Да |
+| `deepseek-reasoner` / `deepseek-r1` | DeepSeek-R1 (Рассуждения) | Пошаговое мышление (`reasoning_content`), математика | Да |
+| `deepseek-chat-search` | DeepSeek-V3 + Поиск | Свежие данные из интернета | Да |
+| `deepseek-reasoner-search` | DeepSeek-R1 + Поиск | Анализ с источниками из интернета | Да |
+| `deepseek-coder` | DeepSeek Coder | Оптимизировано под написание кода | Да |
+| `deepseek-vl` | DeepSeek Native Vision | Распознавание фото, схем, таблиц и документов | Да |
 
 ---
 
 ## API Endpoints
 
-* POST /v1/chat/completions — Основной OpenAI Chat Completions endpoint.
-* POST /v1/messages — Эмуляция Anthropic Messages API (для Claude Code / Anthropic SDK).
-* POST /v1/responses — Эмуляция OpenAI Responses API.
-* GET /v1/models — Список активных моделей.
-* GET /v1/model-capabilities — Подробная информация о возможностях моделей.
-* POST /reset-session?agent=<id> — Сброс памяти конкретной сессии.
-* POST /reset-session?agent=all — Сброс всех активных сессий.
-* GET /health — Проверка статуса сервера и аккаунтов.
-
----
-
-## Развертывание через systemd (Linux / VPS)
-
-Для круглосуточной работы создайте файл службы /etc/systemd/system/deepseek-api.service:
-
-```ini
-[Unit]
-Description=FreeDeepseekAPI Proxy Service
-After=network.target
-
-[Service]
-Type=simple
-User=kek
-WorkingDirectory=/home/kek/deepseek/FreeDeepseekAPI
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=3
-Environment=NODE_ENV=production
-Environment=SKIP_ACCOUNT_MENU=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Управление службой:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable deepseek-api
-sudo systemctl start deepseek-api
-sudo systemctl status deepseek-api
-```
+* `POST /v1/chat/completions` — Основной OpenAI Chat Completions endpoint.
+* `POST /v1/messages` — Эмуляция Anthropic Messages API (для Claude Code / Anthropic SDK).
+* `POST /v1/responses` — Эмуляция OpenAI Responses API.
+* `GET /v1/models` — Список активных моделей.
+* `GET /v1/model-capabilities` — Подробная информация о возможностях моделей.
+* `POST /reset-session?agent=<id>` — Сброс памяти конкретной сессии.
+* `POST /reset-session?agent=all` — Сброс всех активных сессий.
+* `GET /health` — Проверка статуса сервера и аккаунтов.
 
 ---
 
 ## Лицензия
 
-MIT License. Подробнее см. в файле LICENSE.
+Проект распространяется под лицензией MIT. Подробнее см. в файле [LICENSE](./LICENSE).
