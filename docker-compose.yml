@@ -1,0 +1,14 @@
+services:
+  freedeepseek:
+    build: .
+    container_name: freedeepseek-api
+    restart: unless-stopped
+    ports:
+      - "9655:9655"
+    environment:
+      - PORT=9655
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+    volumes:
+      # Mount auth credentials into container
+      - ./deepseek-auth.json:/app/deepseek-auth.json:ro

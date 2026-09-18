@@ -1,0 +1,11 @@
+.git
+.github
+.gitignore
+.DS_Store
+node_modules
+*.log
+docs/
+chrome-extension/
+test_*.py
+test_*.js
+deepseek-auth.json
