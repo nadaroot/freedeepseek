@@ -1,22 +1,15 @@
 #!/usr/bin/env node
 /*
-  Opens/reuses a separate Chrome for Testing profile for DeepSeek Web login and extracts
-  the minimum auth metadata into deepseek-auth.json.
+  Opens/reuses a separate Chrome for Testing / Chrome / Edge / Chromium profile
+  for DeepSeek Web login and extracts the auth metadata into deepseek-auth.json.
 
   Usage:
     node scripts/deepseek_chrome_auth.js
+    # or npm run auth
     # optional override: CHROME_PATH="/path/to/browser" node scripts/deepseek_chrome_auth.js
     # optional reuse: DEEPSEEK_REUSE_CHROME=1 DEEPSEEK_KEEP_CHROME_PROFILE=1 node scripts/deepseek_chrome_auth.js
-
-  Default auth starts a clean disposable Chrome for Testing profile and uses
-  --use-mock-keychain to avoid macOS Keychain prompts.
-
-  Flow:
-    1. Log in at chat.deepseek.com in the opened Chrome profile.
-    2. Send one short prompt (for example: ok) so the frontend initializes state.
-    3. Return to terminal and press Enter.
 */
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -26,7 +19,6 @@ const qwenRepoRoot = path.resolve(repoRoot, '..', 'FreeQwenApi');
 const profileDir =
     process.env.DEEPSEEK_CHROME_PROFILE ||
     path.join(repoRoot, '.chrome-for-testing-profile-deepseek');
-// Use a dedicated default port so an older normal-Chrome auth window on 9333 is not reused.
 const port = Number(process.env.DEEPSEEK_CHROME_PORT || 9334);
 const outPath =
     process.env.DEEPSEEK_AUTH_PATH || path.join(repoRoot, 'deepseek-auth.json');
@@ -49,156 +41,222 @@ function sleepSync(ms) {
 }
 
 function killExistingTestingChrome() {
-    if (process.platform !== 'darwin') return;
-    const patterns = [`--remote-debugging-port=${port}`, profileDir].map(
-        shellPatternSafe,
-    );
-    for (const pattern of patterns) {
+    if (process.platform === 'darwin' || process.platform === 'linux') {
+        const patterns = [`--remote-debugging-port=${port}`, profileDir].map(
+            shellPatternSafe,
+        );
+        for (const pattern of patterns) {
+            try {
+                execFileSync('/usr/bin/pkill', ['-f', pattern], {
+                    stdio: 'ignore',
+                });
+            } catch {}
+        }
+    } else if (process.platform === 'win32') {
         try {
-            execFileSync('/usr/bin/pkill', ['-f', pattern], {
-                stdio: 'ignore',
-            });
+            execSync(`wmic process where "commandline like '%--remote-debugging-port=${port}%'" call terminate`, { stdio: 'ignore' });
         } catch {}
     }
-    sleepSync(800);
+    sleepSync(500);
+}
+
+function removeStaleLocks(dir) {
+    if (!fs.existsSync(dir)) return;
+    const lockFiles = [
+        'SingletonLock',
+        'SingletonSocket',
+        'SingletonCookie',
+        'lockfile',
+        'LOCK',
+    ];
+    for (const f of lockFiles) {
+        try {
+            const p = path.join(dir, f);
+            if (fs.existsSync(p)) fs.unlinkSync(p);
+        } catch {}
+    }
 }
 
 function removeProfileSafely(dir) {
     if (!fs.existsSync(dir)) return;
-    for (let i = 0; i < 5; i++) {
+    removeStaleLocks(dir);
+    for (let i = 0; i < 3; i++) {
         try {
             fs.rmSync(dir, {
                 recursive: true,
                 force: true,
-                maxRetries: 5,
-                retryDelay: 250,
+                maxRetries: 3,
+                retryDelay: 200,
             });
             if (!fs.existsSync(dir)) return;
         } catch (e) {
-            if (i === 4) {
+            if (i === 2) {
                 const staleDir = `${dir}.stale-${Date.now()}`;
-                fs.renameSync(dir, staleDir);
                 try {
-                    fs.rmSync(staleDir, {
-                        recursive: true,
-                        force: true,
-                        maxRetries: 3,
-                        retryDelay: 250,
-                    });
+                    fs.renameSync(dir, staleDir);
                 } catch {}
-                console.log(
-                    `[auth] Old profile was busy; moved it aside: ${staleDir}`,
-                );
                 return;
             }
         }
-        sleepSync(300);
+        sleepSync(200);
     }
+}
+
+function findExecInPath(cmd) {
+    try {
+        const checkCmd = process.platform === 'win32' ? `where.exe ${cmd}` : `which ${cmd}`;
+        const out = execSync(checkCmd, { stdio: ['ignore', 'pipe', 'ignore'] })
+            .toString('utf8')
+            .split(/\r?\n/)[0]
+            .trim();
+        if (out && fs.existsSync(out)) return out;
+    } catch {}
+    return null;
 }
 
 function resolveChromePath() {
-    if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-
-    // Prefer Puppeteer's bundled "Google Chrome for Testing" when available.
-    for (const base of [repoRoot, qwenRepoRoot]) {
-        try {
-            const puppeteerPath = require.resolve('puppeteer', {
-                paths: [base],
-            });
-            const puppeteer = require(puppeteerPath);
-            if (typeof puppeteer.executablePath === 'function') {
-                const p = puppeteer.executablePath();
-                if (p && fs.existsSync(p)) return p;
-            }
-        } catch {}
+    if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
+        return process.env.CHROME_PATH;
     }
 
-    // Try to locate Chrome for Testing in common Puppeteer cache locations.
-    // (The previous version was macOS-only, which broke Windows.)
+    const candidates = [];
     const home = process.env.HOME || process.env.USERPROFILE || '';
+
+    // 1. Check Root Detect / playerok portable downloaded browsers if present
+    const portableDirs = [
+        path.resolve(repoRoot, '..', 'root-detect', 'profiles_data', 'browsers'),
+        path.resolve(repoRoot, '..', 'profiles_data', 'browsers'),
+        path.join(home, '.rootdetect', 'browsers')
+    ];
+    for (const pDir of portableDirs) {
+        if (fs.existsSync(pDir)) {
+            try {
+                const scan = (d) => {
+                    const entries = fs.readdirSync(d, { withFileTypes: true });
+                    for (const e of entries) {
+                        const full = path.join(d, e.name);
+                        if (e.isDirectory()) {
+                            if (full.endsWith('.app')) {
+                                const macBin = path.join(full, 'Contents', 'MacOS', e.name.replace('.app', ''));
+                                if (fs.existsSync(macBin)) candidates.push(macBin);
+                                const macGeneric = path.join(full, 'Contents', 'MacOS', 'Google Chrome for Testing');
+                                if (fs.existsSync(macGeneric)) candidates.push(macGeneric);
+                            } else {
+                                scan(full);
+                            }
+                        } else if (e.isFile()) {
+                            const low = e.name.toLowerCase();
+                            if (low === 'chrome.exe' || low === 'brave.exe' || low === 'chromium.exe' || low === 'chrome') {
+                                candidates.push(full);
+                            }
+                        }
+                    }
+                };
+                scan(pDir);
+            } catch {}
+        }
+    }
+
+    // 2. Puppeteer cache locations
     if (home) {
         const cacheRoot = path.join(home, '.cache', 'puppeteer', 'chrome');
-        try {
-            // macOS / Linux-style cache layout.
-            const candidates = fs
-                .readdirSync(cacheRoot)
-                .flatMap((dir) => {
-                    const baseDir = path.join(cacheRoot, dir);
-                    if (process.platform === 'darwin') {
-                        return [
-                            path.join(
-                                baseDir,
-                                'chrome-mac-arm64',
-                                'Google Chrome for Testing.app',
-                                'Contents',
-                                'MacOS',
-                                'Google Chrome for Testing',
-                            ),
-                            path.join(
-                                baseDir,
-                                'chrome-mac-x64',
-                                'Google Chrome for Testing.app',
-                                'Contents',
-                                'MacOS',
-                                'Google Chrome for Testing',
-                            ),
-                        ];
-                    }
-                    if (process.platform === 'win32') {
-                        // On Windows, Puppeteer cache layouts are not always identical; try the most common one.
-                        // Also consider that executable might be chrome.exe or chrome-win64\chrome.exe.
-                        return [
-                            path.join(baseDir, 'chrome-win64', 'chrome.exe'),
-                            path.join(baseDir, 'chrome-win64', 'chrome.exe'),
-                        ];
-                    }
-                    // linux
-                    return [
-                        path.join(baseDir, 'chrome-linux64', 'chrome'),
-                        path.join(baseDir, 'chrome-linux64', 'chrome.exe'),
-                    ];
-                })
-                .filter((p) => p && fs.existsSync(p))
-                .sort()
-                .reverse();
-            if (candidates[0]) return candidates[0];
-        } catch {}
+        if (fs.existsSync(cacheRoot)) {
+            try {
+                const dirs = fs.readdirSync(cacheRoot);
+                for (const d of dirs) {
+                    const baseDir = path.join(cacheRoot, d);
+                    candidates.push(
+                        path.join(baseDir, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+                        path.join(baseDir, 'chrome-mac-x64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+                        path.join(baseDir, 'chrome-win64', 'chrome.exe'),
+                        path.join(baseDir, 'chrome-win32', 'chrome.exe'),
+                        path.join(baseDir, 'chrome-linux64', 'chrome')
+                    );
+                }
+            } catch {}
+        }
     }
 
-    // Last resort: OS-default Chrome locations.
-    // OS-default Chrome locations (keep it flexible and short).
+    // 3. Platform specific standard installed locations
     if (process.platform === 'win32') {
-        const candidates = [
-            'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-            'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-        ];
-        for (const c of candidates) {
-            if (fs.existsSync(c)) return c;
+        const progFiles = process.env.PROGRAMFILES || 'C:\\Program Files';
+        const progFilesX86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+        const localAppData = process.env.LOCALAPPDATA || (home ? path.join(home, 'AppData', 'Local') : '');
+
+        candidates.push(
+            // Google Chrome (Standard, 64-bit, 32-bit, User-level)
+            path.join(progFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            path.join(progFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            path.join(localAppData, 'Google', 'Chrome SxS', 'Application', 'chrome.exe'),
+            // Microsoft Edge
+            path.join(progFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            path.join(progFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            path.join(localAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            // Brave Browser
+            path.join(progFiles, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
+            path.join(progFilesX86, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
+            path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
+            // Ungoogled Chromium / Thorium / Yandex
+            path.join(localAppData, 'Chromium', 'Application', 'chrome.exe'),
+            path.join(progFiles, 'Thorium', 'Application', 'thorium.exe'),
+            path.join(localAppData, 'Thorium', 'Application', 'thorium.exe'),
+            path.join(localAppData, 'Yandex', 'YandexBrowser', 'Application', 'browser.exe')
+        );
+
+        // Check PATH on Windows
+        for (const cmd of ['chrome.exe', 'msedge.exe', 'brave.exe', 'chromium.exe']) {
+            const found = findExecInPath(cmd);
+            if (found) candidates.push(found);
         }
     } else if (process.platform === 'darwin') {
-        const candidates = [
+        candidates.push(
             '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
             '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        ];
-        for (const c of candidates) {
-            if (fs.existsSync(c)) return c;
+            '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            '/Applications/Arc.app/Contents/MacOS/Arc',
+            path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+            path.join(home, 'Applications', 'Brave Browser.app', 'Contents', 'MacOS', 'Brave Browser')
+        );
+
+        for (const cmd of ['google-chrome', 'chromium', 'brave-browser', 'msedge']) {
+            const found = findExecInPath(cmd);
+            if (found) candidates.push(found);
+        }
+    } else {
+        // Linux
+        candidates.push(
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable',
+            '/usr/bin/chromium',
+            '/usr/bin/chromium-browser',
+            '/snap/bin/chromium',
+            '/usr/bin/brave-browser',
+            '/usr/bin/microsoft-edge',
+            '/usr/bin/microsoft-edge-stable'
+        );
+
+        for (const cmd of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'brave-browser', 'microsoft-edge']) {
+            const found = findExecInPath(cmd);
+            if (found) candidates.push(found);
         }
     }
 
-    // Final fallback: try legacy macOS Chrome path for backward compatibility
-    // (harmless on Windows because fs.existsSync above will fail).
-    const legacyMac =
-        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    if (fs.existsSync(legacyMac)) return legacyMac;
+    for (const c of candidates) {
+        if (c && fs.existsSync(c)) {
+            return c;
+        }
+    }
 
-    return ''; // handled by the caller with a better error message.
+    return '';
 }
-
-const chromePath = resolveChromePath();
 
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
+
 function ask(q) {
     const rl = readline.createInterface({
         input: process.stdin,
@@ -211,38 +269,45 @@ function ask(q) {
         }),
     );
 }
+
 async function fetchJson(u, opts) {
-    const r = await fetch(u, opts);
-    if (!r.ok) throw new Error(`${u} -> HTTP ${r.status}`);
-    return await r.json();
-}
-async function devtoolsReady() {
     try {
-        return await fetchJson(`http://127.0.0.1:${port}/json/version`);
+        const r = await fetch(u, opts);
+        if (!r.ok) return null;
+        return await r.json();
     } catch {
         return null;
     }
 }
+
+async function devtoolsReady() {
+    return await fetchJson(`http://127.0.0.1:${port}/json/version`);
+}
+
 async function waitDevtools() {
-    for (let i = 0; i < 80; i++) {
+    for (let i = 0; i < 100; i++) {
         const v = await devtoolsReady();
         if (v) return v;
         await sleep(250);
     }
-    throw new Error('Chrome DevTools endpoint did not start');
+    throw new Error(`Chrome DevTools endpoint did not start on http://127.0.0.1:${port}. Browser: ${resolveChromePath()}`);
 }
+
 async function getPageTarget() {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 50; i++) {
         const targets = await fetchJson(`http://127.0.0.1:${port}/json`);
-        const page =
-            targets.find(
-                (t) => t.type === 'page' && /chat\.deepseek\.com/.test(t.url),
-            ) || targets.find((t) => t.type === 'page');
-        if (page?.webSocketDebuggerUrl) return page;
+        if (Array.isArray(targets)) {
+            const page =
+                targets.find(
+                    (t) => t.type === 'page' && /chat\.deepseek\.com/.test(t.url),
+                ) || targets.find((t) => t.type === 'page');
+            if (page?.webSocketDebuggerUrl) return page;
+        }
         await sleep(250);
     }
     throw new Error('No Chrome page target found');
 }
+
 class CDP {
     constructor(wsUrl) {
         this.ws = new WebSocket(wsUrl);
@@ -282,6 +347,7 @@ class CDP {
         } catch {}
     }
 }
+
 function parseMaybeJson(s) {
     if (!s) return null;
     try {
@@ -290,10 +356,11 @@ function parseMaybeJson(s) {
         return null;
     }
 }
+
 function normalizeToken(raw) {
     if (!raw) return '';
     const parsed = parseMaybeJson(raw);
-    if (parsed && typeof parsed === 'object')
+    if (parsed && typeof parsed === 'object') {
         return (
             parsed.value ||
             parsed.token ||
@@ -301,8 +368,10 @@ function normalizeToken(raw) {
             parsed.accessToken ||
             ''
         );
+    }
     return String(raw).trim();
 }
+
 async function readPageAuth(cdp) {
     const evalRes = await cdp.send('Runtime.evaluate', {
         expression: `(() => {
@@ -314,7 +383,7 @@ async function readPageAuth(cdp) {
     })()`,
         returnByValue: true,
     });
-    const pageState = evalRes.result.value || {};
+    const pageState = evalRes.result?.value || {};
     const stores = [
         pageState.localStorage || {},
         pageState.sessionStorage || {},
@@ -383,68 +452,77 @@ async function readPageAuth(cdp) {
         cookiesCount: cookies.length,
     };
 }
-function chromeInstallHelp(missingPath) {
-    return `Chrome/Chrome for Testing not found${missingPath ? `: ${missingPath}` : ''}.
 
-How to fix:
-  Windows PowerShell:
+function chromeInstallHelp(missingPath) {
+    return `Браузер (Chrome / Edge / Brave / Chromium) не найден в системе.
+
+Как исправить:
+  Windows:
+    Установите Google Chrome или Microsoft Edge, либо укажите путь:
     $env:CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"; npm run auth
-    # or install Chrome normally: https://www.google.com/chrome/
 
   macOS:
+    Установите Google Chrome, либо укажите путь:
     CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm run auth
-    # or install Chrome for Testing / Google Chrome.
 
-  Linux / Chromium:
-    CHROME_PATH=$(which chromium) npm run auth
-    # Ubuntu example: sudo apt install chromium-browser || sudo apt install chromium
-
-If Chrome is installed elsewhere, set CHROME_PATH to the real executable path.`;
+  Linux:
+    Установите chromium или google-chrome:
+    sudo apt update && sudo apt install -y chromium-browser`;
 }
 
 async function main() {
-    if (!fs.existsSync(chromePath))
+    const chromePath = resolveChromePath();
+    if (!chromePath || !fs.existsSync(chromePath)) {
         throw new Error(chromeInstallHelp(chromePath));
+    }
 
     if (!reuseChrome) {
         killExistingTestingChrome();
         if (!keepProfile && fs.existsSync(profileDir)) {
             removeProfileSafely(profileDir);
-            console.log(
-                `[auth] Removed old Chrome for Testing profile: ${profileDir}`,
-            );
         }
     }
     fs.mkdirSync(profileDir, { recursive: true });
+    removeStaleLocks(profileDir);
 
     if (reuseChrome && (await devtoolsReady())) {
-        console.log(`[auth] Reusing Chrome DevTools on port ${port}`);
+        console.log(`[auth] Подключение к открытому DevTools на порту ${port}`);
     } else {
-        console.log(
-            `[auth] Starting clean Chrome for Testing profile: ${profileDir}`,
-        );
-        console.log(`[auth] Browser executable: ${chromePath}`);
-        const chrome = spawn(
-            chromePath,
-            [
-                `--user-data-dir=${profileDir}`,
-                `--remote-debugging-port=${port}`,
-                '--use-mock-keychain',
-                '--password-store=basic',
-                '--disable-sync',
-                '--disable-extensions',
-                '--disable-component-extensions-with-background-pages',
-                '--disable-features=AutofillServerCommunication,OptimizationHints,MediaRouter,InterestFeedContentSuggestions,Translate',
-                '--no-first-run',
-                '--no-default-browser-check',
-                '--disable-infobars',
-                url,
-            ],
-            { stdio: 'ignore', detached: true },
-        );
-        chrome.unref();
+        console.log(`[auth] Запуск браузера: ${chromePath}`);
+        console.log(`[auth] Изолированный профиль: ${profileDir}`);
+
+        const chromeArgs = [
+            `--user-data-dir=${profileDir}`,
+            `--remote-debugging-port=${port}`,
+            '--remote-allow-origins=*',
+            '--use-mock-keychain',
+            '--password-store=basic',
+            '--disable-sync',
+            '--disable-extensions',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-features=AutofillServerCommunication,OptimizationHints,MediaRouter,InterestFeedContentSuggestions,Translate,ChromeForTestingAlert,OSCryptAsync',
+            '--disable-session-crashed-bubble',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-infobars',
+            url,
+        ];
+
+        const chrome = spawn(chromePath, chromeArgs, {
+            stdio: 'ignore',
+            detached: process.platform !== 'win32',
+        });
+
+        chrome.on('error', (err) => {
+            console.error(`[auth] Ошибка запуска процесса браузера: ${err.message}`);
+        });
+
+        if (typeof chrome.unref === 'function') {
+            chrome.unref();
+        }
     }
 
+    console.log('[auth] Ожидание готовности интерфейса DevTools...');
     await waitDevtools();
     const target = await getPageTarget();
     const cdp = new CDP(target.webSocketDebuggerUrl);
@@ -452,15 +530,11 @@ async function main() {
     await cdp.send('Runtime.enable');
     await cdp.send('Network.enable');
 
-    console.log(
-        '\n[auth] Chrome открыт. Войди в DeepSeek в ЭТОМ отдельном окне.',
-    );
-    console.log(
-        '[auth] После логина отправь в DeepSeek короткое сообщение, например: ok',
-    );
-    await ask(
-        '[auth] Когда залогинился и отправил тестовое сообщение — нажми ENTER здесь: ',
-    );
+    console.log('\n===============================================================');
+    console.log('  Браузер успешно открыт! Войдите в DeepSeek в ОТКРЫТОМ ОКНЕ.');
+    console.log('  После авторизации отправьте ОДНО короткое сообщение (например: ok).');
+    console.log('===============================================================\n');
+    await ask('[auth] Когда залогинились и отправили сообщение — нажмите ENTER здесь: ');
 
     let auth = null;
     for (let i = 0; i < 20; i++) {
@@ -470,21 +544,19 @@ async function main() {
     }
     const { href, cookiesCount, ...persisted } = auth;
     fs.writeFileSync(outPath, JSON.stringify(persisted, null, 2));
-    console.log(`[auth] Saved: ${outPath}`);
-    console.log(`[auth] page: ${href || 'unknown'}`);
+    console.log(`\n[auth] Авторизационные данные сохранены: ${outPath}`);
+    console.log(`[auth] Страница: ${href || 'unknown'}`);
     console.log(
-        `[auth] token: ${persisted.token ? 'OK (' + persisted.token.length + ' chars)' : 'MISSING'}`,
+        `[auth] Token: ${persisted.token ? 'OK (' + persisted.token.length + ' символов)' : 'ОТСУТСТВУЕТ'}`,
     );
     console.log(
-        `[auth] cookie: ${persisted.cookie ? 'OK (' + cookiesCount + ' cookies)' : 'MISSING'}`,
-    );
-    console.log(
-        `[auth] hif headers: ${persisted.hif_dliq || persisted.hif_leim ? 'captured' : 'not captured/optional'}`,
+        `[auth] Cookie: ${persisted.cookie ? 'OK (' + cookiesCount + ' куки)' : 'ОТСУТСТВУЕТ'}`,
     );
     cdp.close();
     if (!persisted.token || !persisted.cookie) process.exitCode = 2;
 }
+
 main().catch((e) => {
-    console.error('[auth] ERROR:', e);
+    console.error('\n[auth] ОШИБКА:', e.message);
     process.exit(1);
 });
