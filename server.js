@@ -334,7 +334,10 @@ function extractImageBuffers(messages, rawParams) {
         }
     }
 
-    for (const msg of messages) {
+    // DeepSeek web API chokes and fails if a session accumulates multiple file attachments.
+    // Only extract images from the most recent message (or rawParams) and cap at 1 image!
+    const recentMessages = messages.slice(-1);
+    for (const msg of recentMessages) {
         if (Array.isArray(msg.content)) {
             for (const part of msg.content) {
                 if (part && part.type === 'image_url' && part.image_url) {
@@ -351,7 +354,7 @@ function extractImageBuffers(messages, rawParams) {
             }
         }
     }
-    return images;
+    return images.slice(-1);
 }
 
 
@@ -1513,7 +1516,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Reset session for a specific agent (or all if no agent specified)
-    if (req.method === 'POST' && url.pathname === '/reset-session') {
+    if ((req.method === 'POST' || req.method === 'GET') && url.pathname === '/reset-session') {
         const agentId = url.searchParams.get('agent') || 'default';
         if (agentId === 'all') {
             const count = sessions.size;
@@ -1760,7 +1763,7 @@ const server = http.createServer(async (req, res) => {
 
             // Empty response — retry loop with fresh sessions
             let retryAttempt = 0;
-            const MAX_RETRIES = Number(process.env.MAX_EMPTY_RETRIES || 2);
+            const MAX_RETRIES = Number(process.env.MAX_EMPTY_RETRIES || 3);
             while ((!fullContent || fullContent.trim().length === 0) && (!reasoningContent || reasoningContent.trim().length === 0)) {
                 if (modelError) {
                     console.log(`${agentTag} DeepSeek model error: ${modelError.content || modelError.type}. Aborting retry.`);
@@ -1790,10 +1793,19 @@ const server = http.createServer(async (req, res) => {
                 session.parentMessageId = null;
                 session.createdAt = null;
                 session.messageCount = 0;
+                session.history = [];
                 console.log(`${agentTag} Waiting ${EMPTY_RESPONSE_RETRY_DELAY_MS}ms before retrying with a fresh session...`);
                 await new Promise(r => setTimeout(r, EMPTY_RESPONSE_RETRY_DELAY_MS));
-                const retryPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-                const { resp: retryResp } = await askDeepSeekStream(retryPrompt, agentId, requestedModel);
+
+                // Guard against huge prompts that DeepSeek web backend drops
+                let cleanPrompt = prompt;
+                if (cleanPrompt.length > 9000) {
+                    cleanPrompt = "...[предыдущая история сжата]\n\n" + cleanPrompt.slice(-7500);
+                }
+                const retryPrompt = systemPrompt ? `${systemPrompt}\n\n${cleanPrompt}` : cleanPrompt;
+
+                // On retry: pass empty ref_file_ids so image upload issues do not block completion
+                const { resp: retryResp } = await askDeepSeekStream(retryPrompt, agentId, requestedModel, [], requestOverrides);
                 const retryResult = await readDeepSeekResponse(retryResp.body);
                 if (retryResult && retryResult.modelError) {
                     console.log(`${agentTag} Retry got model error: ${retryResult.modelError.content}`);
