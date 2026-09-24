@@ -1370,9 +1370,12 @@ function extractScreenshotPaths(messages) {
     const fs = require('fs');
     for (const msg of messages) {
         if (msg.role === 'tool' && msg.content) {
+            const rawContent = typeof msg.content === 'string'
+                ? msg.content
+                : (Array.isArray(msg.content) ? extractTextFromContent(msg.content) : JSON.stringify(msg.content));
             // Look for screenshot_path or path fields in JSON tool results
             // These come DIRECTLY from browser_vision — always the real path
-            const pngMatch = msg.content.match(/["'](screenshot_path|path)["']\s*:\s*["']([^"']+\.(?:png|jpg|jpeg|webp|gif))["']/i);
+            const pngMatch = rawContent.match(/["'](screenshot_path|path)["']\s*:\s*["']([^"']+\.(?:png|jpg|jpeg|webp|gif))["']/i);
             if (pngMatch) {
                 const filePath = pngMatch[2];
                 if (filePath.startsWith('/') && fs.existsSync(filePath)) {
@@ -1380,7 +1383,7 @@ function extractScreenshotPaths(messages) {
                 }
             }
             // Also catch plain MEDIA: tags
-            const mediaMatch = msg.content.match(/MEDIA:(\S+)/g);
+            const mediaMatch = rawContent.match(/MEDIA:(\S+)/g);
             if (mediaMatch) {
                 for (const tag of mediaMatch) {
                     const extractedPath = tag.replace(/^MEDIA:/, '');
