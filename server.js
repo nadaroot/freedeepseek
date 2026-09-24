@@ -972,19 +972,36 @@ function buildUsage(prompt, content, reasoningContent = '') {
     };
 }
 
-function buildToolCallResponse(toolCall, model = 'deepseek-default', prompt = '', reasoningContent = '') {
+function extractTextOutsideToolCall(text) {
+    if (!text || typeof text !== 'string') return '';
+    const markers = ['TOOL_CALL:', '```tool_call', '```json', '<tool_call'];
+    let minIdx = -1;
+    for (const marker of markers) {
+        const idx = text.indexOf(marker);
+        if (idx !== -1 && (minIdx === -1 || idx < minIdx)) {
+            minIdx = idx;
+        }
+    }
+    let clean = (minIdx !== -1 ? text.substring(0, minIdx) : text).trim();
+    clean = clean
+        .replace(/^\s*\}\s*$/gm, '')
+        .replace(/```\s*$/g, '')
+        .trim();
+    return clean;
+}
+
+function buildToolCallResponse(toolCall, model = 'deepseek-default', prompt = '', reasoningContent = '', textContent = '') {
     const id = 'call_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
     const message = {
         role: 'assistant',
-        content: null,
+        content: textContent || null,
         tool_calls: [{
             id: id,
             type: 'function',
             function: { name: toolCall.name, arguments: toolCall.arguments }
         }]
     };
-    // Do not attach reasoning to tool-call turns. Some agent clients treat any
-    // reasoning/text payload as a final assistant answer and stop their tool loop.
+    if (reasoningContent) message.reasoning_content = reasoningContent;
     return {
         id: 'ds-' + Date.now(),
         object: 'chat.completion',
@@ -995,8 +1012,7 @@ function buildToolCallResponse(toolCall, model = 'deepseek-default', prompt = ''
             message,
             finish_reason: 'tool_calls'
         }],
-        usage: buildUsage(prompt, '', reasoningContent),
-        
+        usage: buildUsage(prompt, textContent, reasoningContent),
     };
 }
 
@@ -1329,20 +1345,22 @@ function sendOpenAIStream(res, openaiResp) {
     const created = openaiResp.created;
     const model = openaiResp.model;
     const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
-    if (!hasToolCalls && msg.reasoning_content) {
+    if (msg.reasoning_content) {
         for (let i = 0; i < msg.reasoning_content.length; i += 50) {
             const chunk = msg.reasoning_content.substring(i, i + 50);
             res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { reasoning_content: chunk }, finish_reason: null }] })}\n\n`);
         }
     }
-    if (hasToolCalls) {
-        res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant', content: null, tool_calls: msg.tool_calls }, finish_reason: null }] })}\n\n`);
-        res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`);
-    } else {
+    if (msg.content) {
         for (let i = 0; i < (msg.content || '').length; i += 50) {
             const chunk = msg.content.substring(i, i + 50);
-            res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }] })}\n\n`);
+            res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant', content: chunk }, finish_reason: null }] })}\n\n`);
         }
+    }
+    if (hasToolCalls) {
+        res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: msg.tool_calls }, finish_reason: null }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`);
+    } else {
         res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
     }
     res.end();
@@ -1661,9 +1679,22 @@ const server = http.createServer(async (req, res) => {
                             try {
                                 const d = JSON.parse(line.slice(6));
                                 if (d.response_message_id !== undefined && !newMessageId) newMessageId = d.response_message_id;
-                                if (d.type === 'error' || d.finish_reason || d.content) {
-                                    modelError = { type: d.type || 'error', content: d.content || '', finish_reason: d.finish_reason || null };
-                                    if (d.finish_reason) finishReason = d.finish_reason;
+                                if (d.type === 'error' || (d.error && typeof d.error === 'object')) {
+                                    modelError = { 
+                                        type: 'error', 
+                                        content: (d.error && d.error.message) || d.message || 'DeepSeek API error', 
+                                        finish_reason: d.finish_reason || null 
+                                    };
+                                }
+                                if (d.finish_reason) {
+                                    finishReason = d.finish_reason;
+                                    if (d.finish_reason === 'content_filter' || d.finish_reason === 'blocked') {
+                                        modelError = { 
+                                            type: 'content_filter', 
+                                            content: 'Ответ заблокирован контент-фильтром DeepSeek', 
+                                            finish_reason: d.finish_reason 
+                                        };
+                                    }
                                 }
                                 if (d.p !== undefined) lastPath = d.p;
                                 if (d.v && typeof d.v === 'object' && d.v.response) {
@@ -1869,8 +1900,9 @@ const server = http.createServer(async (req, res) => {
 
             storeHistory(agentId, prompt, fullContent, toolCall);
 
+            const textOutsideTool = extractTextOutsideToolCall(fullContent);
             const openaiResponse = toolCall
-                ? buildToolCallResponse(toolCall, requestedModel, fullPrompt, reasoningContent)
+                ? buildToolCallResponse(toolCall, requestedModel, fullPrompt, reasoningContent, textOutsideTool)
                 : buildTextResponse(fullContent, fullPrompt, requestedModel, reasoningContent);
 
             if (stream) {
