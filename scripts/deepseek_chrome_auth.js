@@ -122,106 +122,45 @@ function resolveChromePath() {
     const candidates = [];
     const home = process.env.HOME || process.env.USERPROFILE || '';
 
-    // 1. Check Root Detect / playerok portable downloaded browsers if present
-    const portableDirs = [
-        path.resolve(repoRoot, '..', 'root-detect', 'profiles_data', 'browsers'),
-        path.resolve(repoRoot, '..', 'profiles_data', 'browsers'),
-        path.join(home, '.rootdetect', 'browsers')
-    ];
-    for (const pDir of portableDirs) {
-        if (fs.existsSync(pDir)) {
-            try {
-                const scan = (d) => {
-                    const entries = fs.readdirSync(d, { withFileTypes: true });
-                    for (const e of entries) {
-                        const full = path.join(d, e.name);
-                        if (e.isDirectory()) {
-                            if (full.endsWith('.app')) {
-                                const macBin = path.join(full, 'Contents', 'MacOS', e.name.replace('.app', ''));
-                                if (fs.existsSync(macBin)) candidates.push(macBin);
-                                const macGeneric = path.join(full, 'Contents', 'MacOS', 'Google Chrome for Testing');
-                                if (fs.existsSync(macGeneric)) candidates.push(macGeneric);
-                            } else {
-                                scan(full);
-                            }
-                        } else if (e.isFile()) {
-                            const low = e.name.toLowerCase();
-                            if (low === 'chrome.exe' || low === 'brave.exe' || low === 'chromium.exe' || low === 'chrome') {
-                                candidates.push(full);
-                            }
-                        }
-                    }
-                };
-                scan(pDir);
-            } catch {}
-        }
-    }
+    // 1. Standard installed browsers FIRST (Regular Google Chrome has highest priority)
+    if (process.platform === 'darwin') {
+        candidates.push(
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+            '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            '/Applications/Arc.app/Contents/MacOS/Arc',
+            path.join(home, 'Applications', 'Brave Browser.app', 'Contents', 'MacOS', 'Brave Browser')
+        );
 
-    // 2. Puppeteer cache locations
-    if (home) {
-        const cacheRoot = path.join(home, '.cache', 'puppeteer', 'chrome');
-        if (fs.existsSync(cacheRoot)) {
-            try {
-                const dirs = fs.readdirSync(cacheRoot);
-                for (const d of dirs) {
-                    const baseDir = path.join(cacheRoot, d);
-                    candidates.push(
-                        path.join(baseDir, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
-                        path.join(baseDir, 'chrome-mac-x64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
-                        path.join(baseDir, 'chrome-win64', 'chrome.exe'),
-                        path.join(baseDir, 'chrome-win32', 'chrome.exe'),
-                        path.join(baseDir, 'chrome-linux64', 'chrome')
-                    );
-                }
-            } catch {}
+        for (const cmd of ['google-chrome', 'chromium', 'brave-browser', 'msedge']) {
+            const found = findExecInPath(cmd);
+            if (found) candidates.push(found);
         }
-    }
-
-    // 3. Platform specific standard installed locations
-    if (process.platform === 'win32') {
+    } else if (process.platform === 'win32') {
         const progFiles = process.env.PROGRAMFILES || 'C:\\Program Files';
         const progFilesX86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
         const localAppData = process.env.LOCALAPPDATA || (home ? path.join(home, 'AppData', 'Local') : '');
 
         candidates.push(
-            // Google Chrome (Standard, 64-bit, 32-bit, User-level)
             path.join(progFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
             path.join(progFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
             path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
             path.join(localAppData, 'Google', 'Chrome SxS', 'Application', 'chrome.exe'),
-            // Microsoft Edge
             path.join(progFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
             path.join(progFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
             path.join(localAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-            // Brave Browser
             path.join(progFiles, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
             path.join(progFilesX86, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
             path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
-            // Ungoogled Chromium / Thorium / Yandex
             path.join(localAppData, 'Chromium', 'Application', 'chrome.exe'),
             path.join(progFiles, 'Thorium', 'Application', 'thorium.exe'),
             path.join(localAppData, 'Thorium', 'Application', 'thorium.exe'),
             path.join(localAppData, 'Yandex', 'YandexBrowser', 'Application', 'browser.exe')
         );
 
-        // Check PATH on Windows
         for (const cmd of ['chrome.exe', 'msedge.exe', 'brave.exe', 'chromium.exe']) {
-            const found = findExecInPath(cmd);
-            if (found) candidates.push(found);
-        }
-    } else if (process.platform === 'darwin') {
-        candidates.push(
-            '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-            '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-            '/Applications/Chromium.app/Contents/MacOS/Chromium',
-            '/Applications/Arc.app/Contents/MacOS/Arc',
-            path.join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
-            path.join(home, 'Applications', 'Brave Browser.app', 'Contents', 'MacOS', 'Brave Browser')
-        );
-
-        for (const cmd of ['google-chrome', 'chromium', 'brave-browser', 'msedge']) {
             const found = findExecInPath(cmd);
             if (found) candidates.push(found);
         }
@@ -244,9 +183,71 @@ function resolveChromePath() {
         }
     }
 
+    // Return first installed regular browser if found
     for (const c of candidates) {
         if (c && fs.existsSync(c)) {
             return c;
+        }
+    }
+
+    // 2. Puppeteer cache locations (fallback only)
+    if (home) {
+        const cacheRoot = path.join(home, '.cache', 'puppeteer', 'chrome');
+        if (fs.existsSync(cacheRoot)) {
+            try {
+                const dirs = fs.readdirSync(cacheRoot);
+                for (const d of dirs) {
+                    const baseDir = path.join(cacheRoot, d);
+                    const pCandidates = [
+                        path.join(baseDir, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+                        path.join(baseDir, 'chrome-mac-x64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+                        path.join(baseDir, 'chrome-win64', 'chrome.exe'),
+                        path.join(baseDir, 'chrome-win32', 'chrome.exe'),
+                        path.join(baseDir, 'chrome-linux64', 'chrome')
+                    ];
+                    for (const pc of pCandidates) {
+                        if (fs.existsSync(pc)) return pc;
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    // 3. Root Detect / portable downloaded testing browsers (last resort fallback)
+    const portableDirs = [
+        path.resolve(repoRoot, '..', 'root-detect', 'profiles_data', 'browsers'),
+        path.resolve(repoRoot, '..', 'profiles_data', 'browsers'),
+        path.join(home, '.rootdetect', 'browsers')
+    ];
+    for (const pDir of portableDirs) {
+        if (fs.existsSync(pDir)) {
+            try {
+                let foundBin = null;
+                const scan = (d) => {
+                    if (foundBin) return;
+                    const entries = fs.readdirSync(d, { withFileTypes: true });
+                    for (const e of entries) {
+                        const full = path.join(d, e.name);
+                        if (e.isDirectory()) {
+                            if (full.endsWith('.app')) {
+                                const macBin = path.join(full, 'Contents', 'MacOS', e.name.replace('.app', ''));
+                                if (fs.existsSync(macBin)) { foundBin = macBin; return; }
+                                const macGeneric = path.join(full, 'Contents', 'MacOS', 'Google Chrome for Testing');
+                                if (fs.existsSync(macGeneric)) { foundBin = macGeneric; return; }
+                            } else {
+                                scan(full);
+                            }
+                        } else if (e.isFile()) {
+                            const low = e.name.toLowerCase();
+                            if (low === 'chrome.exe' || low === 'brave.exe' || low === 'chromium.exe' || low === 'chrome') {
+                                foundBin = full;
+                                return;
+                            }
+                        }
+                    }
+                };
+                scan(pDir);
+            } catch {}
         }
     }
 
@@ -508,9 +509,14 @@ async function main() {
             url,
         ];
 
+        const spawnEnv = Object.assign({}, process.env, {
+            OBJC_DISABLE_INITIALIZE_FORK_SAFETY: 'YES'
+        });
+
         const chrome = spawn(chromePath, chromeArgs, {
             stdio: 'ignore',
             detached: process.platform !== 'win32',
+            env: spawnEnv
         });
 
         chrome.on('error', (err) => {
@@ -534,13 +540,24 @@ async function main() {
     console.log('  Браузер успешно открыт! Войдите в DeepSeek в ОТКРЫТОМ ОКНЕ.');
     console.log('  После авторизации отправьте ОДНО короткое сообщение (например: ok).');
     console.log('===============================================================\n');
-    await ask('[auth] Когда залогинились и отправили сообщение — нажмите ENTER здесь: ');
-
     let auth = null;
-    for (let i = 0; i < 20; i++) {
-        auth = await readPageAuth(cdp);
-        if (auth.token && auth.cookie) break;
-        await sleep(500);
+    if (process.env.NON_INTERACTIVE === '1') {
+        console.log('[auth] Режим фонового ожидания авторизации (до 180с)...');
+        for (let i = 0; i < 180; i++) {
+            await sleep(1000);
+            auth = await readPageAuth(cdp);
+            if (auth && auth.token && auth.cookie) {
+                console.log('[auth] Авторизация успешно обнаружена в браузере!');
+                break;
+            }
+        }
+    } else {
+        await ask('[auth] Когда залогинились и отправили сообщение — нажмите ENTER здесь: ');
+        for (let i = 0; i < 20; i++) {
+            auth = await readPageAuth(cdp);
+            if (auth && auth.token && auth.cookie) break;
+            await sleep(500);
+        }
     }
     const { href, cookiesCount, ...persisted } = auth;
     fs.writeFileSync(outPath, JSON.stringify(persisted, null, 2));

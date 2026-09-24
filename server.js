@@ -675,19 +675,15 @@ async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default', re
 function formatToolDefinitions(tools) {
     if (!tools || tools.length === 0) return '';
     let text = '\n\n--- TOOL REQUEST SYSTEM ---\n';
-    text += 'You are an AI that ONLY REASONS and REQUESTS tool executions. You do NOT run any commands yourself.\n';
-    text += 'When you need data from the local server, REQUEST exactly one tool call. Prefer strict JSON:\n';
+    text += 'You are an intelligent AI assistant and agent running on the user machine.\n';
+    text += 'CRITICAL RULES:\n';
+    text += '1. If the user message is a general question, greeting, explanation, code question, or chat prompt that does NOT require executing terminal commands or modifying files, DO NOT CALL ANY TOOL. Respond directly to the user in fluent, helpful Russian using standard natural Markdown text. NEVER respond as code or wrap your entire response in code blocks!\n';
+    text += '2. When you genuinely need to read/write local files, run commands, or search code on ' + SERVER_HOST + ', REQUEST exactly one tool call using strict JSON:\n';
     text += '{"tool_call":{"name":"<function_name>","arguments":{...}}}\n\n';
     text += 'Legacy format is also accepted: TOOL_CALL: <function_name>\narguments: <JSON arguments>\n\n';
-    text += 'Your response will be sent to the local gateway, which executes the command and sends the output back in the next message.\n\n';
-    text += 'RULES:\n';
-    text += '1. You ONLY output the tool request — you never run anything yourself\n';
-    text += '2. Do NOT simulate, guess, or fabricate command output — wait for the actual result\n';
-    text += '3. The tool runs on ' + SERVER_HOST + ' (' + SERVER_PUBLIC_IP + '), the local server — NOT on DeepSeek\n';
-    text += '4. After the tool executes, the result will be sent to you as a new user/tool message\n';
-    text += '5. Never add explanation before or after the tool request when requesting a tool\n';
-    text += '6. Keep arguments compact. Do not include large file contents unless the tool schema requires it.\n\n';
-    text += '7. Never write action narration like "Read file", "Open file", "Search for", "I will inspect", or a checklist of files. Those are invalid. Output the tool request itself.\n\n';
+    text += '3. Do NOT simulate or fabricate command or file output — execute the tool and wait for the real result.\n';
+    text += '4. Keep tool arguments compact. Do not dump enormous file contents unless strictly necessary.\n';
+    text += '5. Do NOT use emojis, emoticons, or stickers under any circumstances. Keep responses clean, technical, and professional.\n\n';
     text += 'Available functions:\n';
     for (const tool of tools) {
         if (tool.type === 'function' && tool.function) {
