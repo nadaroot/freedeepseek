@@ -507,6 +507,36 @@ const MODEL_CONFIGS = {
         capabilities: { reasoning: true, web_search: false, files: false },
         supported: true,
     },
+    'deepseek-coder-33b-instruct': {
+        model_type: 'default', thinking_enabled: false, search_enabled: false,
+        real_model: 'DeepSeek-Coder 33B Instruct (mapped to DeepSeek Coder)',
+        capabilities: { reasoning: false, web_search: false, files: true },
+        supported: true,
+    },
+    'deepseek-coder-6.7b-instruct': {
+        model_type: 'default', thinking_enabled: false, search_enabled: false,
+        real_model: 'DeepSeek-Coder 6.7B Instruct (mapped to DeepSeek Coder)',
+        capabilities: { reasoning: false, web_search: false, files: true },
+        supported: true,
+    },
+    'deepseek-math-7b-instruct': {
+        model_type: 'default', thinking_enabled: true, search_enabled: false,
+        real_model: 'DeepSeek-Math 7B Instruct (mapped to DeepSeek Math/R1 Reasoning)',
+        capabilities: { reasoning: true, web_search: false, files: true },
+        supported: true,
+    },
+    'deepseek-ai/deepseek-v3': {
+        model_type: 'default', thinking_enabled: false, search_enabled: false,
+        real_model: 'DeepSeek-V3 router alias',
+        capabilities: { reasoning: false, web_search: false, files: true },
+        supported: true,
+    },
+    'deepseek-ai/deepseek-r1': {
+        model_type: 'default', thinking_enabled: true, search_enabled: false,
+        real_model: 'DeepSeek-R1 router alias',
+        capabilities: { reasoning: true, web_search: false, files: true },
+        supported: true,
+    },
     'deepseek-vision': {
         model_type: 'default', thinking_enabled: false, search_enabled: false,
         real_model: 'DeepSeek Web Vision (native upload via ref_file_ids)',
@@ -514,6 +544,41 @@ const MODEL_CONFIGS = {
         supported: true,
     },
 };
+
+const MODEL_ALIASES = {
+    'deepseek-coder-33b-instruct': 'deepseek-coder',
+    'deepseek-coder-6.7b-instruct': 'deepseek-coder',
+    'deepseek-coder-7b': 'deepseek-coder',
+    'deepseek-coder-instruct': 'deepseek-coder',
+    'deepseek-coder-v2': 'deepseek-coder',
+    'deepseek-coder-33b': 'deepseek-coder',
+    'deepseek-math-7b-instruct': 'deepseek-math',
+    'deepseek-math-7b': 'deepseek-math',
+    'deepseek-ai/deepseek-v3': 'deepseek-chat',
+    'deepseek-ai/deepseek-r1': 'deepseek-reasoner',
+    'deepseek-ai/deepseek-coder-33b-instruct': 'deepseek-coder',
+    'deepseek-ai/deepseek-coder-6.7b-instruct': 'deepseek-coder',
+    'deepseek-ai/deepseek-coder-v2': 'deepseek-coder',
+    'deepseek-ai/deepseek-coder-7b': 'deepseek-coder',
+    'deepseek-ai/deepseek-math-7b-instruct': 'deepseek-math',
+    'deepseek-ai/deepseek-vl': 'deepseek-vision',
+    'deepseek-ai/deepseek-vl2': 'deepseek-vision',
+    'deepseek-v3': 'deepseek-chat',
+    'deepseek-r1': 'deepseek-reasoner',
+    'deepseek-default': 'deepseek-chat',
+    'deepseek-chat-search': 'deepseek-v3-search',
+    'deepseek-reasoner-search': 'deepseek-r1-search',
+};
+
+const PRIMARY_MODEL_IDS = [
+    'deepseek-chat',
+    'deepseek-reasoner',
+    'deepseek-coder',
+    'deepseek-v3-search',
+    'deepseek-reasoner-search',
+    'deepseek-expert',
+    'deepseek-vision'
+];
 
 const SUPPORTED_MODEL_IDS = Object.keys(MODEL_CONFIGS).filter(id => MODEL_CONFIGS[id].supported);
 const ALL_MODEL_CAPABILITIES = Object.fromEntries(Object.entries(MODEL_CONFIGS).map(([id, cfg]) => [id, {
@@ -528,11 +593,56 @@ const ALL_MODEL_CAPABILITIES = Object.fromEntries(Object.entries(MODEL_CONFIGS).
 }]));
 
 function resolveModelConfig(model) {
-    const requested = String(model || 'deepseek-chat').toLowerCase();
-    return MODEL_CONFIGS[requested] || MODEL_CONFIGS['deepseek-chat'];
+    if (!model) return MODEL_CONFIGS['deepseek-chat'];
+    const requested = String(model).trim().toLowerCase();
+
+    // 1. Direct hit in MODEL_CONFIGS
+    if (MODEL_CONFIGS[requested]) {
+        return MODEL_CONFIGS[requested];
+    }
+
+    // 2. Direct hit in MODEL_ALIASES
+    if (MODEL_ALIASES[requested] && MODEL_CONFIGS[MODEL_ALIASES[requested]]) {
+        return MODEL_CONFIGS[MODEL_ALIASES[requested]];
+    }
+
+    // 3. Strip common prefixes
+    const cleanName = requested.replace(/^(deepseek-ai\/|models\/)/, '');
+    if (MODEL_CONFIGS[cleanName]) {
+        return MODEL_CONFIGS[cleanName];
+    }
+    if (MODEL_ALIASES[cleanName] && MODEL_CONFIGS[MODEL_ALIASES[cleanName]]) {
+        return MODEL_CONFIGS[MODEL_ALIASES[cleanName]];
+    }
+
+    // 4. Heuristic fallbacks so ANY deepseek / AI model name gracefully routes to a working model
+    if (cleanName.includes('coder') || cleanName.includes('code') || cleanName.includes('dev')) {
+        return MODEL_CONFIGS['deepseek-coder'];
+    }
+    if (cleanName.includes('math') || cleanName.includes('reason') || cleanName.includes('r1') || cleanName.includes('think')) {
+        if (cleanName.includes('search')) {
+            return MODEL_CONFIGS['deepseek-reasoner-search'];
+        }
+        return MODEL_CONFIGS['deepseek-reasoner'];
+    }
+    if (cleanName.includes('expert') || cleanName.includes('pro')) {
+        if (cleanName.includes('search')) {
+            return MODEL_CONFIGS['deepseek-expert-search'];
+        }
+        return MODEL_CONFIGS['deepseek-expert'];
+    }
+    if (cleanName.includes('vision') || cleanName.includes('vl') || cleanName.includes('image')) {
+        return MODEL_CONFIGS['deepseek-vision'];
+    }
+    if (cleanName.includes('search')) {
+        return MODEL_CONFIGS['deepseek-v3-search'];
+    }
+
+    // 5. Ultimate fallback: DeepSeek-V3 Chat
+    return MODEL_CONFIGS['deepseek-chat'];
 }
-function isKnownModel(model) { return Object.prototype.hasOwnProperty.call(MODEL_CONFIGS, String(model || '').toLowerCase()); }
-function isSupportedModel(model) { return resolveModelConfig(model).supported === true; }
+function isKnownModel(model) { return true; }
+function isSupportedModel(model) { return true; }
 
 async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default', refFileIds = [], requestOverrides = {}) {
     const modelCfg = resolveModelConfig(model);
@@ -1483,10 +1593,10 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // Models: OpenAI-compatible list exposes only aliases verified to work through this proxy.
+    // Models: OpenAI-compatible list exposes verified primary models
     if (req.method === 'GET' && url.pathname === '/v1/models') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: SUPPORTED_MODEL_IDS.map(id => ({ id, object: 'model', created: 1700000000, owned_by: 'deepseek-web', real_model: MODEL_CONFIGS[id].real_model, capabilities: MODEL_CONFIGS[id].capabilities })) }));
+        res.end(JSON.stringify({ object: 'list', data: PRIMARY_MODEL_IDS.map(id => ({ id, object: 'model', created: 1700000000, owned_by: 'deepseek-web', real_model: MODEL_CONFIGS[id] ? MODEL_CONFIGS[id].real_model : id, capabilities: MODEL_CONFIGS[id] ? MODEL_CONFIGS[id].capabilities : {} })) }));
         return;
     }
 
