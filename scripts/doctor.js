@@ -25,8 +25,18 @@ function checkAuthFile(file) {
   if (!fs.existsSync(file)) return { file, ok: false, issues: ['auth file missing'], auth: null };
   try { auth = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (e) { return { file, ok: false, issues: [`invalid JSON: ${e.message}`], auth: null }; }
-  if (!auth.token) issues.push('token missing');
-  if (!auth.cookie) issues.push('cookie missing');
+  if (!auth.token) {
+    issues.push('token missing');
+  } else if (/^\d+$/.test(String(auth.token).trim())) {
+    issues.push('token looks invalid (timestamp/number instead of userToken)');
+  } else if (String(auth.token).trim().length < 24) {
+    issues.push('token is suspiciously short (< 24 chars)');
+  }
+  if (!auth.cookie) {
+    issues.push('cookie missing');
+  } else if (!String(auth.cookie).includes('ds_session_id')) {
+    issues.push('cookie missing ds_session_id');
+  }
   if (!auth.wasmUrl) issues.push('wasmUrl missing');
   if (process.platform !== 'win32') {
     const mode = fs.statSync(file).mode & 0o777;

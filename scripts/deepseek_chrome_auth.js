@@ -358,19 +358,45 @@ function parseMaybeJson(s) {
     }
 }
 
+function isValidUserToken(t) {
+    if (!t || typeof t !== 'string') return false;
+    const s = t.trim();
+    // Real DeepSeek tokens are long base64/hex/JWT-like strings (typically 40+ chars)
+    if (s.length < 24) return false;
+    // Strictly reject pure numbers or timestamps (e.g. "1790451540712")
+    if (/^\d+$/.test(s)) return false;
+    // Reject common boolean/null/undefined/error artifacts
+    if (/^(true|false|null|undefined|nan|object|error)$/i.test(s)) return false;
+    // Reject AWS WAF artifacts
+    if (/^aws/i.test(s)) return false;
+    return true;
+}
+
 function normalizeToken(raw) {
     if (!raw) return '';
     const parsed = parseMaybeJson(raw);
     if (parsed && typeof parsed === 'object') {
-        return (
+        const candidate = (
             parsed.value ||
             parsed.token ||
             parsed.access_token ||
             parsed.accessToken ||
+            parsed.userToken ||
             ''
         );
+        if (isValidUserToken(candidate)) {
+            return String(candidate).trim();
+        }
     }
-    return String(raw).trim();
+    const str = String(raw).trim();
+    return isValidUserToken(str) ? str : '';
+}
+
+function isAuthComplete(auth) {
+    if (!auth) return false;
+    if (!isValidUserToken(auth.token)) return false;
+    if (!auth.cookie || !auth.cookie.includes('ds_session_id')) return false;
+    return true;
 }
 
 async function readPageAuth(cdp) {
@@ -390,6 +416,8 @@ async function readPageAuth(cdp) {
         pageState.sessionStorage || {},
     ];
     let token = '';
+
+    // 1. First priority: Check known userToken keys directly
     for (const store of stores) {
         for (const key of [
             'userToken',
@@ -397,18 +425,28 @@ async function readPageAuth(cdp) {
             'auth_token',
             'access_token',
             'accessToken',
+            'ds_user_token',
         ]) {
             token = normalizeToken(store[key]);
             if (token) break;
         }
         if (token) break;
     }
+
+    // 2. Second priority: Fallback search across keys, strictly ignoring AWS WAF and non-auth keys
     if (!token) {
         for (const store of stores) {
             for (const [k, v] of Object.entries(store)) {
-                if (/token/i.test(k)) {
-                    token = normalizeToken(v);
-                    if (token) break;
+                // Strictly ignore non-user-auth keys such as AWS WAF timestamps, challenges, attempts
+                if (/aws|waf|timestamp|attempt|metric|refresh|expire|time|date|challenge/i.test(k)) {
+                    continue;
+                }
+                if (/token/i.test(k) || /auth/i.test(k)) {
+                    const candidate = normalizeToken(v);
+                    if (candidate) {
+                        token = candidate;
+                        break;
+                    }
                 }
             }
             if (token) break;
@@ -417,7 +455,7 @@ async function readPageAuth(cdp) {
 
     const cookieRes = await cdp.send('Network.getAllCookies');
     const cookies = (cookieRes.cookies || []).filter((c) =>
-        /deepseek\.com$/.test(c.domain),
+        /(^|\.)deepseek\.com$/.test(c.domain) || /deepseek/i.test(c.domain),
     );
     const cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
 
@@ -434,8 +472,12 @@ async function readPageAuth(cdp) {
                 lk === 'authorization' &&
                 !token &&
                 /^Bearer\s+/i.test(String(v))
-            )
-                token = String(v).replace(/^Bearer\s+/i, '');
+            ) {
+                const candidate = String(v).replace(/^Bearer\s+/i, '').trim();
+                if (isValidUserToken(candidate)) {
+                    token = candidate;
+                }
+            }
         }
     }
 
@@ -546,20 +588,29 @@ async function main() {
         for (let i = 0; i < 180; i++) {
             await sleep(1000);
             auth = await readPageAuth(cdp);
-            if (auth && auth.token && auth.cookie) {
-                console.log('[auth] Авторизация успешно обнаружена в браузере!');
+            if (isAuthComplete(auth)) {
+                console.log('[auth] Авторизация успешно обнаружена в браузере! Ожидание стабилизации сессии...');
+                // Give 2.5s for smidV2 and security headers (hif_dliq/hif_leim) to settle
+                await sleep(2500);
+                auth = await readPageAuth(cdp);
                 break;
             }
         }
     } else {
         await ask('[auth] Когда залогинились и отправили сообщение — нажмите ENTER здесь: ');
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < 30; i++) {
             auth = await readPageAuth(cdp);
-            if (auth && auth.token && auth.cookie) break;
+            if (isAuthComplete(auth)) break;
             await sleep(500);
         }
     }
-    const { href, cookiesCount, ...persisted } = auth;
+
+    if (!auth || !isAuthComplete(auth)) {
+        console.error('\n[auth] Внимание: Авторизация пользователя не была завершена.');
+        console.error('[auth] Убедитесь, что вы успешно вошли в аккаунт DeepSeek и отправили тестовое сообщение.');
+    }
+
+    const { href, cookiesCount, ...persisted } = auth || {};
     fs.writeFileSync(outPath, JSON.stringify(persisted, null, 2));
     console.log(`\n[auth] Авторизационные данные сохранены: ${outPath}`);
     console.log(`[auth] Страница: ${href || 'unknown'}`);
@@ -567,10 +618,10 @@ async function main() {
         `[auth] Token: ${persisted.token ? 'OK (' + persisted.token.length + ' символов)' : 'ОТСУТСТВУЕТ'}`,
     );
     console.log(
-        `[auth] Cookie: ${persisted.cookie ? 'OK (' + cookiesCount + ' куки)' : 'ОТСУТСТВУЕТ'}`,
+        `[auth] Cookie: ${persisted.cookie ? 'OK (' + (cookiesCount || 0) + ' куки)' : 'ОТСУТСТВУЕТ'}`,
     );
     cdp.close();
-    if (!persisted.token || !persisted.cookie) process.exitCode = 2;
+    if (!isAuthComplete(persisted)) process.exitCode = 2;
 }
 
 main().catch((e) => {

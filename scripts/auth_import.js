@@ -43,7 +43,18 @@ function normalizeCookieInput(input) {
   return '';
 }
 function normalizeAuth(input, extra = {}) {
-  const token = String(input.token || input.access_token || input.accessToken || input.auth_token || extra.token || process.env.DEEPSEEK_TOKEN || '').trim().replace(/^Bearer\s+/i, '');
+  let rawToken = input.token || input.userToken || input.access_token || input.accessToken || input.auth_token || extra.token || process.env.DEEPSEEK_TOKEN || '';
+  if (rawToken && typeof rawToken === 'object') {
+    rawToken = rawToken.value || rawToken.token || '';
+  } else if (typeof rawToken === 'string' && (rawToken.trim().startsWith('{') || rawToken.trim().startsWith('['))) {
+    try {
+      const parsed = JSON.parse(rawToken.trim());
+      if (parsed && typeof parsed === 'object') {
+        rawToken = parsed.value || parsed.token || rawToken;
+      }
+    } catch {}
+  }
+  const token = String(rawToken).trim().replace(/^Bearer\s+/i, '');
   const cookie = normalizeCookieInput(input) || extra.cookie || '';
   const auth = {
     token,
@@ -56,8 +67,18 @@ function normalizeAuth(input, extra = {}) {
 }
 function validateAuth(auth) {
   const errors = [];
-  if (!auth.token) errors.push('token missing');
-  if (!auth.cookie) errors.push('cookie missing');
+  if (!auth.token) {
+    errors.push('token missing');
+  } else if (/^\d+$/.test(auth.token)) {
+    errors.push('token looks invalid (timestamp/number instead of userToken)');
+  } else if (auth.token.length < 24) {
+    errors.push('token is suspiciously short (< 24 chars)');
+  }
+  if (!auth.cookie) {
+    errors.push('cookie missing');
+  } else if (!auth.cookie.includes('ds_session_id')) {
+    errors.push('cookie missing ds_session_id');
+  }
   if (!auth.wasmUrl) errors.push('wasmUrl missing');
   return errors;
 }
